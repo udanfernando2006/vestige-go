@@ -1,0 +1,113 @@
+-- Vestige-Go — SQLite schema
+-- Source-verified translation of models.py (SQLAlchemy/Postgres) — same five
+-- tables, same field-for-field shapes, no fields added or dropped.
+--
+-- Open items NOT resolved by this file (flagged inline where relevant):
+--   - Migration tool (golang-migrate / goose / hand-rolled) — blueprint §7 item 3, still open.
+--     This is plain schema SQL, not yet wrapped in any migration-tool format.
+--   - Price storage: NUMERIC(10,2) has no native SQLite equivalent — flagged at that column.
+--   - sync_config()/books_config.json is NOT ported (confirmed decision) — no seed data,
+--     no bootstrap-file table. Custom stock regex patterns live as ordinary rows in
+--     setting_overrides, same as every other setting key — no schema change needed for
+--     that decision, since setting_overrides was already a flat key/value table in v1.
+
+PRAGMA foreign_keys = ON;
+
+-- =============================================================================
+-- series
+-- =============================================================================
+CREATE TABLE series (
+    id          INTEGER PRIMARY KEY,   -- SQLite INTEGER PRIMARY KEY == rowid alias,
+                                        -- behaves like BigInteger autoincrement
+    name        TEXT NOT NULL UNIQUE,
+    author      TEXT,                  -- nullable by omission of NOT NULL
+    description TEXT
+);
+
+-- =============================================================================
+-- books
+-- =============================================================================
+CREATE TABLE books (
+    id              INTEGER PRIMARY KEY,
+    name            TEXT NOT NULL,
+    isbn            TEXT NOT NULL UNIQUE,
+    is_series_entry INTEGER NOT NULL DEFAULT 0,   -- SQLite has no native BOOLEAN.
+                                                    -- 0/1 by convention, same as Postgres
+                                                    -- under the hood via the driver
+    author          TEXT,
+    description     TEXT,
+    series_id       INTEGER REFERENCES series(id)  -- nullable FK, matches Optional[int]
+);
+
+CREATE INDEX idx_books_series_id ON books(series_id);
+
+-- =============================================================================
+-- stores
+-- =============================================================================
+CREATE TABLE stores (
+    id                  INTEGER PRIMARY KEY,
+    name                TEXT NOT NULL UNIQUE,
+    base_url            TEXT NOT NULL,
+    search_url_template TEXT   -- nullable; null = undiscovered (Crawler's cached pattern)
+);
+
+-- =============================================================================
+-- tracking_pairs
+-- =============================================================================
+CREATE TABLE tracking_pairs (
+    id                 INTEGER PRIMARY KEY,
+    book_id            INTEGER NOT NULL REFERENCES books(id),
+    store_id           INTEGER NOT NULL REFERENCES stores(id),
+    product_url        TEXT,
+    price_selector     TEXT,
+    stock_selector     TEXT,
+    status             TEXT NOT NULL DEFAULT 'PENDING',
+    selector_found_at  TEXT,   -- nullable ISO8601 timestamp — see note below on DateTime
+
+    UNIQUE (book_id, store_id)   -- uq_book_store, same composite constraint as v1
+);
+
+CREATE INDEX idx_tracking_pairs_book_id ON tracking_pairs(book_id);
+CREATE INDEX idx_tracking_pairs_store_id ON tracking_pairs(store_id);
+CREATE INDEX idx_tracking_pairs_status ON tracking_pairs(status);
+
+-- =============================================================================
+-- availability_snapshots
+-- =============================================================================
+CREATE TABLE availability_snapshots (
+    id          INTEGER PRIMARY KEY,
+    pair_id     INTEGER NOT NULL REFERENCES tracking_pairs(id),
+    in_stock    INTEGER,   -- nullable boolean (0/1/NULL) — Optional[bool] in Python
+
+    -- price: Numeric(10,2) in Postgres has no native SQLite equivalent.
+    -- SQLite storage classes are NULL/INTEGER/REAL/TEXT/BLOB only — no fixed-point
+    -- decimal type. Declared TEXT here as a deliberate placeholder pending the open
+    -- decision (blueprint-adjacent, not yet made): store as TEXT and parse via a Go
+    -- decimal library (shopspring/decimal) to preserve exact-cents behavior, or
+    -- store as REAL and accept float64 rounding risk Python's Decimal never had.
+    -- NOT resolved by this schema file — flagging rather than silently picking one.
+    price       TEXT,
+
+    status      TEXT NOT NULL,
+    source      TEXT,        -- nullable: "scraper" | "llm_direct"
+    scraped_at  TEXT NOT NULL   -- ISO8601 UTC string, e.g. 2026-07-19T12:34:56Z
+);
+
+-- Direct port of models.py's Index("idx_pair_scraped_desc", pair_id, scraped_at.desc())
+CREATE INDEX idx_pair_scraped_desc ON availability_snapshots(pair_id, scraped_at DESC);
+
+-- =============================================================================
+-- setting_overrides
+-- =============================================================================
+CREATE TABLE setting_overrides (
+    key          TEXT PRIMARY KEY,
+    value        TEXT NOT NULL,
+    is_encrypted INTEGER NOT NULL DEFAULT 0
+);
+
+-- Same 11 keys as v1, no schema change to add a 12th if one is ever needed later
+-- (flat key/value table — adding a setting is a code change, not a migration,
+-- exactly as vestige_guide.md §6 already notes for v1). CUSTOM_STOCK_IN_PATTERNS
+-- and CUSTOM_STOCK_OUT_PATTERNS are ordinary rows here now — no books_config.json,
+-- no sync_config() seed/re-apply path, per the confirmed decision to move that
+-- into the Settings UI directly.
