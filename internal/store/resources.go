@@ -569,6 +569,20 @@ func (s *SQLiteStore) DeleteSeries(ctx context.Context, id int64) error {
 // STORES
 // =============================================================================
 
+func (s *SQLiteStore) GetStoreByName(ctx context.Context, name string) (*domain.Store, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT id, name, base_url, search_url_template FROM stores WHERE name = ?`, name)
+	var st domain.Store
+	err := row.Scan(&st.ID, &st.Name, &st.BaseURL, &st.SearchURLTemplate)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("store: get store by name %q: %w", name, err)
+	}
+	return &st, nil
+}
+
+
 func (s *SQLiteStore) GetAllStores(ctx context.Context) ([]domain.Store, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT id, name, base_url, search_url_template FROM stores`)
 	if err != nil {

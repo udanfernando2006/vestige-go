@@ -161,6 +161,7 @@ type PairStore interface {
 
 	// --- Stores (StoreController/StoreService.java) ---
 	GetAllStores(ctx context.Context) ([]domain.Store, error)
+	GetStoreByName(ctx context.Context, name string) (*domain.Store, error)
 	StoreExistsByName(ctx context.Context, name string) (bool, error)
 	CreateStore(ctx context.Context, s domain.Store) (*domain.Store, error)
 	UpdateStore(ctx context.Context, id int64, name, baseURL, searchURLTemplate *string) (*domain.Store, error)
