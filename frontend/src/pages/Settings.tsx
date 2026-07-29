@@ -234,19 +234,20 @@ export default function Settings() {
                                         Run scraper automatically every (hours)
                                         <input
                                             type="number"
-                                            min="1"
                                             step="1"
                                             placeholder="Disabled"
                                             value={draft.scrapeIntervalHours}
-                                            onChange={(e) =>
+                                            onChange={(e) => {
+                                                const v = e.target.value;
+                                                if (v !== "" && Number(v) < 0) return; // ignore negative input, don't set it
                                                 setDraft({
-                                                    ...draft,
-                                                    scrapeIntervalHours:
-                                                        e.target.value === ""
-                                                            ? ""
-                                                            : Number(e.target.value),
+                                                      ...draft,
+                                                      scrapeIntervalHours:
+                                                          e.target.value === ""
+                                                              ? ""
+                                                              : Number(e.target.value),
                                                 })
-                                            }
+                                            }}
                                         />
                                     </label>
                                     <p className="muted">

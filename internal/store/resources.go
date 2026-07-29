@@ -1055,6 +1055,7 @@ func (s *SQLiteStore) GetSettingsStatus(ctx context.Context) (*domain.SettingsSt
 	out := &domain.SettingsStatus{
 		LLMDiscoveryEnabled:    full.LLMDiscoveryEnabled,
 		LLMMode:                full.LLMMode,
+		NotificationsEnabled: 	full.NotificationsEnabled,
 		SelectorAPIBase:        full.SelectorAPIBase,
 		SelectorModel:          full.SelectorModel,
 		DirectAPIBase:          full.DirectAPIBase,

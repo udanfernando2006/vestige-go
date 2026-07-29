@@ -84,6 +84,7 @@ var ErrCipherRequired = errors.New("store: setting is encrypted but no cipher is
 var settingsKeys = []string{
 	"LLM_DISCOVERY_ENABLED",
 	"LLM_MODE",
+	"NOTIFICATIONS_ENABLED",
 	"SELECTOR_API_BASE",
 	"SELECTOR_API_KEY",
 	"SELECTOR_MODEL",
@@ -493,6 +494,7 @@ func (s *SQLiteStore) GetSettings(ctx context.Context) (*domain.Settings, error)
 	out := &domain.Settings{
 		LLMDiscoveryEnabled: strings.EqualFold(strings.TrimSpace(raw["LLM_DISCOVERY_ENABLED"]), "true"),
 		LLMMode:             raw["LLM_MODE"],
+		NotificationsEnabled: strings.EqualFold(strings.TrimSpace(raw["NOTIFICATIONS_ENABLED"]), "true"),
 		SelectorAPIBase:     raw["SELECTOR_API_BASE"],
 		SelectorAPIKey:      raw["SELECTOR_API_KEY"],
 		SelectorModel:       raw["SELECTOR_MODEL"],

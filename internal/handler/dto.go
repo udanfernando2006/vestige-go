@@ -203,6 +203,7 @@ type SnapshotHistoryDto struct {
 type SettingsResponse struct {
 	LLMDiscoveryEnabled     bool     `json:"llmDiscoveryEnabled"`
 	LLMMode                 string   `json:"llmMode"`
+	NotificationsEnabled 	bool   	 `json:"notificationsEnabled"`
 	SelectorAPIBase         string   `json:"selectorApiBase"`
 	SelectorAPIKeyConfigured bool    `json:"selectorApiKeyConfigured"`
 	SelectorAPIKeyHint      *string  `json:"selectorApiKeyHint"`
@@ -217,8 +218,9 @@ type SettingsResponse struct {
 }
 
 type SettingsUpdateRequest struct {
-	LLMDiscoveryEnabled *bool    `json:"llmDiscoveryEnabled"`
-	LLMMode              *string `json:"llmMode"`
+	LLMDiscoveryEnabled   *bool   `json:"llmDiscoveryEnabled"`
+	LLMMode               *string `json:"llmMode"`
+	NotificationsEnabled  *bool   `json:"notificationsEnabled"`
 	SelectorAPIBase       *string `json:"selectorApiBase"`
 	SelectorAPIKey        *string `json:"selectorApiKey"`
 	SelectorModel         *string `json:"selectorModel"`

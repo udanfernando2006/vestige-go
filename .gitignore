@@ -35,10 +35,11 @@ go.work.sum
 # .idea/
 # .vscode/
 
-# Local Database
+# Local Database & Dev files
 *.db
 *.sqlite
 *.sqlite3
+/logs
 
 # Frontend (Node / Vite)
 frontend/node_modules/

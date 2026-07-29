@@ -23,6 +23,7 @@ package domain
 type Settings struct {
 	LLMDiscoveryEnabled bool   `json:"llm_discovery_enabled"`
 	LLMMode             string `json:"llm_mode"` // "selector" | "direct"
+	NotificationsEnabled bool  `json:"notifications_enabled"`
 
 	SelectorAPIBase string `json:"selector_api_base"`
 	SelectorAPIKey  string `json:"selector_api_key"` // secret — never echoed by handlers, see writer.py get_settings_status()
@@ -61,6 +62,7 @@ type Settings struct {
 type SettingsStatus struct {
 	LLMDiscoveryEnabled bool   `json:"llm_discovery_enabled"`
 	LLMMode             string `json:"llm_mode"`
+	NotificationsEnabled bool  `json:"notifications_enabled"`
 
 	SelectorAPIBase        string  `json:"selector_api_base"`
 	SelectorAPIKeyConfig   bool    `json:"selector_api_key_configured"`

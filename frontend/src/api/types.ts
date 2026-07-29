@@ -199,6 +199,7 @@ export interface DiscoverResultDto {
 export interface SettingsDto {
     llmDiscoveryEnabled: boolean;
     llmMode: string;
+    notificationsEnabled: boolean;
     selectorApiBase: string;
     selectorApiKeyConfigured: boolean;
     selectorApiKeyHint?: string;
@@ -213,6 +214,7 @@ export interface SettingsDto {
 export interface SettingsUpdateDto {
     llmDiscoveryEnabled?: boolean;
     llmMode?: string;
+    notificationsEnabled?: boolean;
     selectorApiBase?: string;
     selectorApiKey?: string;
     selectorModel?: string;

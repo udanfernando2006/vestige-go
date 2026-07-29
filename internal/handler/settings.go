@@ -25,6 +25,7 @@ func settingsStatusToResponse(s *domain.SettingsStatus) SettingsResponse {
 	return SettingsResponse{
 		LLMDiscoveryEnabled:      s.LLMDiscoveryEnabled,
 		LLMMode:                  s.LLMMode,
+		NotificationsEnabled: 	  s.NotificationsEnabled,
 		SelectorAPIBase:          s.SelectorAPIBase,
 		SelectorAPIKeyConfigured: s.SelectorAPIKeyConfig,
 		SelectorAPIKeyHint:       s.SelectorAPIKeyHint,
@@ -70,6 +71,7 @@ func (srv *Server) updateSettings(c *gin.Context) {
 	updates := map[string]*string{
 		"LLM_DISCOVERY_ENABLED": boolToSettingValue(dto.LLMDiscoveryEnabled),
 		"LLM_MODE":               dto.LLMMode,
+		"NOTIFICATIONS_ENABLED":  boolToSettingValue(dto.NotificationsEnabled),
 		"SELECTOR_API_BASE":      dto.SelectorAPIBase,
 		"SELECTOR_API_KEY":       dto.SelectorAPIKey,
 		"SELECTOR_MODEL":         dto.SelectorModel,
