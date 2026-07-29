@@ -342,7 +342,7 @@ func (o *Orchestrator) loadActivePairs(ctx context.Context) ([]store.ActivePair,
 // left to propagate uncaught out of the error handler itself).
 func (o *Orchestrator) handleError(ctx context.Context, pair *store.ActivePair, cause error) *domain.AvailabilityResult {
 	errMsg := cause.Error()
-	fmt.Printf("[ERROR] Pair %d (%s): %s\n", pair.ID, pair.BookName, errMsg)
+	fmt.Fprintf(os.Stderr, "[ERROR] Pair %d (%s): %s\n", pair.ID, pair.BookName, errMsg)
 
 	errorStatus := "ERROR"
 	result := &domain.AvailabilityResult{Status: &errorStatus, Reason: &errMsg}
@@ -355,7 +355,7 @@ func (o *Orchestrator) handleError(ctx context.Context, pair *store.ActivePair, 
 			// nested try). Logged and continued instead, per this
 			// project's own "wrap each pair's execution so one failure
 			// doesn't abort the whole run" principle. See divergence #4b.
-			fmt.Printf("[ERROR] Pair %d: failed to clear selectors after selector_not_found: %v\n", pair.ID, clearErr)
+			fmt.Fprintf(os.Stderr, "[ERROR] Pair %d: failed to clear selectors after selector_not_found: %v\n", pair.ID, clearErr)
 		}
 		needsSetupStatus := "NEEDS_SETUP"
 		selectorNotFoundReason := "selector_not_found"
@@ -393,7 +393,7 @@ func (o *Orchestrator) classifyStockFallback(ctx context.Context, settings *doma
 
 		llmClient, err := llm.NewClient(r.apiBase, r.apiKey, stockFallbackLLMTimeout)
 		if err != nil {
-			fmt.Printf("[Stock Fallback] %s role attempt failed: %v\n", r.role, err)
+			fmt.Fprintf(os.Stderr, "[Stock Fallback] %s role attempt failed: %v\n", r.role, err)
 			continue
 		}
 		extractor, err := NewExtractor(ExtractorConfig{
@@ -402,7 +402,7 @@ func (o *Orchestrator) classifyStockFallback(ctx context.Context, settings *doma
 			ModelName: r.model,
 		}, llmClient)
 		if err != nil {
-			fmt.Printf("[Stock Fallback] %s role attempt failed: %v\n", r.role, err)
+			fmt.Fprintf(os.Stderr, "[Stock Fallback] %s role attempt failed: %v\n", r.role, err)
 			continue
 		}
 
@@ -411,7 +411,7 @@ func (o *Orchestrator) classifyStockFallback(ctx context.Context, settings *doma
 			// Per ClassifyStockStatus's own doc comment, this should be
 			// rare — it only ever wraps a Go-specific failure Python's
 			// implementation has no path for (e.g. context cancellation).
-			fmt.Printf("[Stock Fallback] %s role attempt failed: %v\n", r.role, err)
+			fmt.Fprintf(os.Stderr, "[Stock Fallback] %s role attempt failed: %v\n", r.role, err)
 			continue
 		}
 		if result != nil {
@@ -708,7 +708,7 @@ func (o *Orchestrator) runPairPathB(ctx context.Context, pair *store.ActivePair,
 		// either, for the same reason as the primary discovery attempt.
 		outcome, fallbackErr := o.runPairPathD(ctx, pair, session, settings, prefetchedHTML)
 		if fallbackErr != nil {
-			fmt.Printf("Path B: Direct-extraction fallback also failed for Pair %d: %v\n", pair.ID, fallbackErr)
+			fmt.Fprintf(os.Stderr, "Path B: Direct-extraction fallback also failed for Pair %d: %v\n", pair.ID, fallbackErr)
 			if setErr := o.store.UpdatePairStatus(ctx, pair.ID, "NEEDS_SETUP"); setErr != nil {
 				return pairOutcome{}, fmt.Errorf("failed to mark pair %d NEEDS_SETUP after fallback failure: %w", pair.ID, setErr)
 			}
@@ -1036,14 +1036,14 @@ var _ browser.Session = (*lazySession)(nil)
 // try/except around its Path D fallback is a SEPARATE, nested catch that
 // never reaches here — see runPairPathB).
 func (o *Orchestrator) runPair(ctx context.Context, pair *store.ActivePair, path pipelinePath, settings *domain.Settings) pairOutcome {
-	fmt.Printf("Running Pair ID %d via Path %s\n", pair.ID, path)
+	fmt.Fprintf(os.Stderr, "Running Pair ID %d via Path %s\n", pair.ID, path)
 
 	if path == pathNeedsSetup {
 		if err := o.store.UpdatePairStatus(ctx, pair.ID, "NEEDS_SETUP"); err != nil {
 			// Python has no guard here either — a DB failure at this
 			// exact point would propagate uncaught in Python too. Logged
 			// and continued instead; see divergence #4.
-			fmt.Printf("[ERROR] Pair %d: failed to persist NEEDS_SETUP status: %v\n", pair.ID, err)
+			fmt.Fprintf(os.Stderr, "[ERROR] Pair %d: failed to persist NEEDS_SETUP status: %v\n", pair.ID, err)
 		}
 		return pairOutcome{PairID: pair.ID, Status: "NEEDS_SETUP"}
 	}
@@ -1107,15 +1107,14 @@ func outcomeFromErrorResult(pairID int64, errResult *domain.AvailabilityResult) 
 // logged and the pair is skipped, rather than crashing the entire run)
 // and divergence #7 (the int/list "errors" collision in Python's own
 // returned dict — this port keeps both values rather than discarding one).
-func (o *Orchestrator) RunAll(ctx context.Context) (*RunSummary, error) {
-	runID := time.Now().UTC().Format("2006-01-02T15:04:05Z")
+func (o *Orchestrator) RunAll(ctx context.Context, runID string) (*RunSummary, error) {
 	startTime := time.Now().UTC()
 
 	pairs, err := o.loadActivePairs(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("orchestrator: failed to load active pairs: %w", err)
 	}
-	fmt.Printf("[%s] Starting run — %d active pairs\n", runID, len(pairs))
+	fmt.Fprintf(os.Stderr, "[%s] Starting run — %d active pairs\n", runID, len(pairs))
 
 	settings, err := o.store.GetSettings(ctx)
 	if err != nil {
@@ -1149,12 +1148,12 @@ func (o *Orchestrator) RunAll(ctx context.Context) (*RunSummary, error) {
 				// for change-detection/summary purposes, rather than
 				// crashing the entire run the way an uncaught Python
 				// exception here would.
-				fmt.Printf("[ERROR] Pair %d: failed to load last snapshot: %v\n", pair.ID, snapErr)
+				fmt.Fprintf(os.Stderr, "[ERROR] Pair %d: failed to load last snapshot: %v\n", pair.ID, snapErr)
 			}
 
 			availability := result.Result
 			if _, writeErr := o.store.WriteSnapshot(ctx, pair.ID, availability); writeErr != nil {
-				fmt.Printf("[ERROR] Pair %d: failed to write snapshot: %v\n", pair.ID, writeErr)
+				fmt.Fprintf(os.Stderr, "[ERROR] Pair %d: failed to write snapshot: %v\n", pair.ID, writeErr)
 			}
 
 			pairSummary.Price = availability.Price
@@ -1199,7 +1198,7 @@ func (o *Orchestrator) RunAll(ctx context.Context) (*RunSummary, error) {
 	summary.ErrorEntries = errorEntries
 	summary.DurationSeconds = math.Round(durationSeconds*10) / 10
 
-	fmt.Printf("[%s] Done — %d completed, %d changes, %d errors in %.1fs\n",
+	fmt.Fprintf(os.Stderr, "[%s] Done — %d completed, %d changes, %d errors in %.1fs\n",
 		runID, summary.Completed, len(changes), len(errorEntries), durationSeconds)
 
 	return &summary, nil

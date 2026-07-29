@@ -72,6 +72,7 @@ import (
 
 	appicon "github.com/udanfernando2006/vestige-go/build"
 	frontendassets "github.com/udanfernando2006/vestige-go/frontend"
+	"github.com/udanfernando2006/vestige-go/internal/applog"
 	"github.com/udanfernando2006/vestige-go/internal/handler"
 	"github.com/udanfernando2006/vestige-go/internal/pipeline"
 	"github.com/udanfernando2006/vestige-go/internal/security"
@@ -90,6 +91,13 @@ func main() {
 	headless := flag.Bool("headless", true, "run the browser headless (Python's own default: True)")
 	port := flag.String("port", "0", "HTTP port for the Gin API to bind (0 = OS-assigned ephemeral port, the default for the desktop build)")
 	flag.Parse()
+
+	logFile, err := applog.Setup(*logDir)
+	if err != nil {
+		log.Printf("applog setup failed (continuing without live log file): %v", err)
+	} else {
+		defer logFile.Close()
+	}
 
 	// Real Python defaults — see package doc comment. NOT arbitrary.
 	const waitTime = 5 * time.Second

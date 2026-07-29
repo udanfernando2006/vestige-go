@@ -829,7 +829,9 @@ func runOrchestrator(dbPath string, headless bool, browserTimeout, waitTime, run
 	ctx, cancel := context.WithTimeout(context.Background(), runTimeout)
 	defer cancel()
 
-	summary, err := orch.RunAll(ctx)
+	runID := time.Now().UTC().Format("2006-01-02T15:04:05Z")
+
+	summary, err := orch.RunAll(ctx, runID)
 	if err != nil {
 		fatalf("RunAll failed: %v", err)
 	}

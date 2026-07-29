@@ -21,6 +21,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/udanfernando2006/vestige-go/internal/applog"
 	"github.com/udanfernando2006/vestige-go/internal/pipeline"
 	"github.com/udanfernando2006/vestige-go/internal/runlog"
 )
@@ -45,7 +46,16 @@ func (srv *Server) executeRun(ctx context.Context) (*pipeline.RunSummary, error)
 	}
 	defer srv.running.Store(false)
 
-	summary, err := srv.orch.RunAll(ctx)
+	runID := time.Now().UTC().Format("2006-01-02T15:04:05Z")
+
+	runLog, err := applog.StartRun(runID)
+	if err != nil {
+		log.Printf("applog: StartRun failed (continuing without per-run file): %v", err)
+	} else {
+		defer runLog.Close()
+	}
+
+	summary, err := srv.orch.RunAll(ctx, runID)
 	if err != nil {
 		return nil, err
 	}
