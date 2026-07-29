@@ -184,6 +184,10 @@ export interface RunDetailDto {
     changes: RunChangeDto[];
 }
 
+export interface RunStatusDto {
+    running: boolean;
+}
+
 export interface DiscoverResultDto {
     pairId: number;
     priceSelector?: string;

@@ -131,6 +131,7 @@ func NewRouter(s store.PairStore, logDir string, orch *pipeline.Orchestrator, di
 
 		runs := api.Group("/runs")
 		runs.GET("", srv.getRecentRuns)
+		runs.GET("/status", srv.getRunStatus)
 		runs.GET("/:runId", srv.getRunDetail)
 		runs.POST("/trigger", srv.triggerRun)
 		runs.POST("/discover/:pairId", srv.discover)

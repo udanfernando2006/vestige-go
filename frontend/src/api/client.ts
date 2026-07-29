@@ -19,6 +19,7 @@ import type {
     HistoryQuery,
     RunSummaryDto,
     RunDetailDto,
+    RunStatusDto,
     DiscoverResultDto,
     SettingsDto,
     SettingsUpdateDto,
@@ -219,6 +220,10 @@ export function getRunDetail(runId: string): Promise<RunDetailDto> {
 
 export function triggerRun(): Promise<RunSummaryDto> {
     return request("/api/runs/trigger", { method: "POST" });
+}
+
+export function getRunStatus(): Promise<RunStatusDto> {
+    return request("/api/runs/status");
 }
 
 export function discoverSelectors(pairId: number): Promise<DiscoverResultDto> {

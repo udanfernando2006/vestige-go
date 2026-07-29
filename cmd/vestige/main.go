@@ -56,6 +56,7 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"errors"
 	"flag"
 	"log"
@@ -69,13 +70,17 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/services/notifications"
 
+	appicon "github.com/udanfernando2006/vestige-go/build"
+	frontendassets "github.com/udanfernando2006/vestige-go/frontend"
 	"github.com/udanfernando2006/vestige-go/internal/handler"
 	"github.com/udanfernando2006/vestige-go/internal/pipeline"
 	"github.com/udanfernando2006/vestige-go/internal/security"
 	"github.com/udanfernando2006/vestige-go/internal/store"
-	appicon "github.com/udanfernando2006/vestige-go/build"
-	frontendassets "github.com/udanfernando2006/vestige-go/frontend"
+	"github.com/udanfernando2006/vestige-go/internal/tray"
 )
+
+//go:embed assets/tray-icon.png
+var trayIcon []byte
 
 func main() {
 	dbPath := flag.String("db", "vestige.db", "path to the SQLite database file")
@@ -144,10 +149,15 @@ func main() {
 	apiService := &APIService{port: apiPort}
 	notifier := notifications.New()
 
+	var mainWindow *application.WebviewWindow
+
 	app := application.New(application.Options{
 		Name:        "Vestige",
 		Description: "Book price and availability tracker",
 		Icon:        appicon.IconPNG,
+		ShouldQuit: func() bool {
+			return true // tray Quit / Cmd+Q / Alt+F4 / app.Quit() all proceed; window-hide is handled separately by the WindowClosing hook, not here
+		},
 		Services: []application.Service{
 			application.NewService(apiService),
 			application.NewService(notifier),
@@ -157,6 +167,10 @@ func main() {
 		},
 		OnShutdown: func() {
 			log.Println("shutdown requested, shutting down gracefully...")
+			// mainWindow.Close() removed — Wails closes windows automatically
+			// as part of its own shutdown sequence (step 4, after OnShutdown
+			// per the documented lifecycle), so calling Close() here raced
+			// against that and double-closed window #1.
 			cancelScheduler()
 
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -166,14 +180,22 @@ func main() {
 			}
 			log.Println("shutdown complete")
 		},
+		SingleInstance: &application.SingleInstanceOptions{
+			UniqueID: "io.github.udanfernando2006.vestigego",
+			OnSecondInstanceLaunch: func(data application.SecondInstanceData) {
+				tray.ShowAndFocus(mainWindow)
+			},
+		},
 	})
 
-	app.Window.NewWithOptions(application.WebviewWindowOptions{
+	mainWindow = app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:  "Vestige",
 		Width:  1280,
 		Height: 800,
 		URL:    "/",
 	})
+
+	tray.Setup(app, mainWindow, trayIcon)
 
 	// Route OS signals (Ctrl+C in a dev terminal, SIGTERM from a process
 	// manager) through Wails' own quit sequence rather than bypassing it —

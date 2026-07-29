@@ -1,14 +1,16 @@
 import { useEffect, useState, useCallback } from "react";
-import { getAvailability, getRuns, triggerRun } from "../api/client";
+import { getAvailability, getRuns, getRunStatus, triggerRun } from "../api/client";
 import type { AvailabilityDto, RunSummaryDto } from "../api/types";
 import BookCard from "../components/BookCard";
 import RunLog from "../components/RunLog";
+
+const STATUS_POLL_MS = 3000;
 
 export default function Dashboard() {
     const [availability, setAvailability] = useState<AvailabilityDto[]>([]);
     const [runs, setRuns] = useState<RunSummaryDto[]>([]);
     const [loading, setLoading] = useState(true);
-    const [triggering, setTriggering] = useState(false);
+    const [running, setRunning] = useState(false); // now reflects the BACKEND's srv.running, not just "did I click"
     const [error, setError] = useState<string | null>(null);
 
     const load = useCallback(async () => {
@@ -32,20 +34,51 @@ export default function Dashboard() {
         }
     }, []);
 
+    // Checks real backend run state on mount AND on an interval — this is
+    // what fixes navigate-away-and-back: on remount, this immediately asks
+    // the server "is a run actually in progress" instead of assuming false.
+    // Also covers scheduled runs the user never clicked to start.
+    useEffect(() => {
+        let cancelled = false;
+
+        async function poll() {
+            try {
+                const status = await getRunStatus();
+                if (!cancelled) setRunning(status.running);
+            } catch {
+                // status-poll failures shouldn't surface as a page error —
+                // the button just stays in its last-known state until the
+                // next successful poll.
+            }
+        }
+
+        poll();
+        const interval = setInterval(poll, STATUS_POLL_MS);
+        return () => {
+            cancelled = true;
+            clearInterval(interval);
+        };
+    }, []);
+
     useEffect(() => {
         load();
     }, [load]);
 
     async function handleRunNow() {
-        setTriggering(true);
+        setRunning(true); // optimistic — the next poll tick confirms/corrects it either way
         setError(null);
         try {
             await triggerRun();
             await load();
         } catch (err) {
-            setError(err instanceof Error ? err.message : "Run failed");
+            // A 409 here means the poll simply hasn't caught up yet (race
+            // between click and the next tick) — not a real failure, so
+            // don't show it as one.
+            if (!(err instanceof Error && err.message.includes("already in progress"))) {
+                setError(err instanceof Error ? err.message : "Run failed");
+            }
         } finally {
-            setTriggering(false);
+            setRunning(false);
         }
     }
 
@@ -60,8 +93,8 @@ export default function Dashboard() {
         <div className="page">
             <div className="page-header">
                 <h2>Dashboard</h2>
-                <button onClick={handleRunNow} disabled={triggering}>
-                    {triggering ? "Running…" : "Run Now"}
+                <button onClick={handleRunNow} disabled={running}>
+                    {running ? "Running…" : "Run Now"}
                 </button>
             </div>
             {error && <p className="form-error">{error}</p>}

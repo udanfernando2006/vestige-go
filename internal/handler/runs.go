@@ -186,3 +186,18 @@ func closeSessionQuietly(ctx context.Context, s browser.Session) {
 		fmt.Printf("[discover] session close error (non-fatal): %v\n", err)
 	}
 }
+
+type RunStatusResponse struct {
+	Running bool `json:"running"`
+}
+
+// getRunStatus lets the frontend distinguish "no run happening, button
+// should be enabled" from "a run (manual or scheduled) is already in
+// progress" WITHOUT attempting a trigger — closes the gap where
+// triggerRun's 409 was previously the only way to discover this,
+// which meant the frontend had to guess (or get it wrong across a
+// navigate-away-and-back remount, since React state doesn't survive
+// that). Read-only, no side effects — safe to poll.
+func (srv *Server) getRunStatus(c *gin.Context) {
+	c.JSON(http.StatusOK, RunStatusResponse{Running: srv.running.Load()})
+}
