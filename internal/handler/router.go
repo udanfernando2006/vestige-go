@@ -187,9 +187,9 @@ func isAllowedOrigin(origin string) bool {
 	switch {
 	case strings.HasPrefix(origin, "http://localhost:"):
 		return true
-	case origin == "http://tauri.localhost":
+	case strings.HasPrefix(origin, "http://127.0.0.1:"):
 		return true
-	case origin == "tauri://localhost":
+	case strings.HasPrefix(origin, "http://wails.localhost"):
 		return true
 	default:
 		return false

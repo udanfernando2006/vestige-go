@@ -1,52 +1,80 @@
-// Command vestige is the Vestige-Go entrypoint — wires together security
-// (key + cipher), the store layer, the pipeline (Crawler/Scraper/
-// Discoverer/Orchestrator), and the Gin HTTP layer, then serves — now with
-// the background scheduler started alongside it and graceful shutdown on
-// SIGINT/SIGTERM (Ctrl+C). /health is registered inside handler.NewRouter
-// itself, not here.
+//go:build !server
+
+// Command vestige is the Vestige-Go desktop entrypoint (the default build —
+// excluded from server-mode builds via the constraint above, since
+// main_server.go provides its own main() for -tags server and two main()
+// declarations compiling together is a real error, not a style choice).
+// Wires together security (key + cipher), the store layer, the pipeline
+// (Crawler/Scraper/Discoverer/Orchestrator), and the Gin HTTP layer, then
+// serves — now with the background scheduler started alongside it, wrapped
+// as a Wails v3 desktop app. /health is registered inside handler.NewRouter
+// itself, not here. applySchemaIfNewDB/splitStatements now live in
+// schema.go (shared, no build tag) — main_server.go uses the same two.
 //
-// This is genuinely new code, not a port of any single Python/Java file —
-// v1 has no equivalent single entrypoint (its three processes — api,
-// scraper, scraper-server — are each wired separately, mostly by Spring's
-// own DI container and docker-compose, not hand-written Go). Every
-// constructor call below uses REAL, source-confirmed signatures from the
-// uploaded files (store.go, scraper.go, crawler.go, discovery.go,
-// orchestrator.go, keystore.go, cipher.go, handler/router.go) — nothing
-// here is guessed.
+// WAILS INTEGRATION (this pass's changes, everything else below is
+// unchanged from the prior version of this file):
+//   - -port's default changed from "8080" to "0" — the Gin listener now
+//     binds an OS-assigned ephemeral port by default (net.Listen("tcp",
+//     "127.0.0.1:0")), specifically so nothing the user already has running
+//     can collide with it. A fixed port is still supported by passing
+//     -port explicitly (relevant for a future server-mode/headless build
+//     target — see Taskfile.yml's build:server/run:server tasks, not yet
+//     investigated).
+//   - APIService (cmd/vestige/apiservice.go) is bound via Wails' Services
+//     list and exposes GetAPIPort() — the frontend calls this once at
+//     startup (in-process IPC, no HTTP round-trip) to learn which port the
+//     Gin server actually landed on. See ui/api/settings.ts.
+//   - Shutdown ownership moved from a standalone signal.NotifyContext
+//     blocking-wait to Wails' own OnShutdown lifecycle hook (confirmed
+//     real API: v3.wails.io/concepts/lifecycle/ — "OnShutdown - A callback
+//     for when the application is about to quit", fired regardless of
+//     whether the quit came from window-close, Cmd+Q/Alt+F4, or a
+//     programmatic app.Quit() call). OS signals (Ctrl+C in a dev terminal,
+//     SIGTERM from a process manager) now route THROUGH app.Quit() instead
+//     of bypassing Wails' shutdown sequence — a small goroutine watches
+//     signal.NotifyContext purely to call app.Quit(), deliberately only
+//     started after app.Window.NewWithOptions (not before app.Run()),
+//     since Wails' own changelog documents a real "nil pointer crash in
+//     application.Quit when called before Run or after Run returned early"
+//     bug class.
+//   - The pipeline scheduler's context is now a plain context.WithCancel,
+//     cancelled from inside OnShutdown — decoupled from OS-signal delivery
+//     specifically because window-close/Cmd+Q are now valid shutdown
+//     triggers that were never OS signals to begin with.
 //
-// FLAGGED PLACEHOLDERS, not silently baked in:
+// FLAGGED PLACEHOLDERS, not silently baked in (unchanged from before):
 //   - -keydir's default is a plain relative folder. The real value should
 //     be Wails' app_data_dir() equivalent, which migration blueprint §7
 //     item 14 explicitly still lists as open ("not wired up until Phase
-//     3+"). This flag exists so the real path can be supplied without
-//     touching this file once that's decided.
+//     3+"). Still open — not resolved by this pass.
 //   - -db/-schema/-logdir defaults are similarly plain relative paths,
 //     fine for `go run`/local dev, almost certainly wrong for a real
 //     packaged Wails app — same open question.
-//   - wait_time=5s / timeout=60s are NOT placeholders — these are
-//     Python's real, documented defaults, confirmed directly in
-//     scraper.go's own NewScraper doc comment ("Python's defaults
-//     (headless=True, wait_time=5, timeout=60000ms)"), not invented here.
+//   - wait_time=5s / timeout=60s are NOT placeholders — Python's real,
+//     documented defaults, confirmed in scraper.go's own doc comment.
 package main
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"flag"
-	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
+
+	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/wailsapp/wails/v3/pkg/services/notifications"
 
 	"github.com/udanfernando2006/vestige-go/internal/handler"
 	"github.com/udanfernando2006/vestige-go/internal/pipeline"
 	"github.com/udanfernando2006/vestige-go/internal/security"
 	"github.com/udanfernando2006/vestige-go/internal/store"
+	appicon "github.com/udanfernando2006/vestige-go/build"
+	frontendassets "github.com/udanfernando2006/vestige-go/frontend"
 )
 
 func main() {
@@ -55,7 +83,7 @@ func main() {
 	logDir := flag.String("logdir", "logs", "directory for date-nested run-log JSON files")
 	keyDir := flag.String("keydir", "./.vestige-go-keys", "fallback dir for the settings-encryption key if the OS keychain is unavailable — PLACEHOLDER, see package doc comment")
 	headless := flag.Bool("headless", true, "run the browser headless (Python's own default: True)")
-	port := flag.String("port", "8080", "HTTP port to listen on")
+	port := flag.String("port", "0", "HTTP port for the Gin API to bind (0 = OS-assigned ephemeral port, the default for the desktop build)")
 	flag.Parse()
 
 	// Real Python defaults — see package doc comment. NOT arbitrary.
@@ -89,95 +117,80 @@ func main() {
 
 	router, srv := handler.NewRouter(pairStore, *logDir, orch, discoverer, *headless, opTimeout)
 
-	// ctx is cancelled on SIGINT/SIGTERM (Ctrl+C, or a normal process-manager
-	// stop) — the single root signal for both the scheduler goroutine's
-	// lifetime and the HTTP server's graceful shutdown trigger below.
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+	// Ephemeral by default (-port 0): bind now so the real port is known
+	// before APIService is constructed below. A fixed port (if -port was
+	// passed explicitly) is recovered the same way, via listener.Addr().
+	listener, err := net.Listen("tcp", "127.0.0.1:"+*port)
+	if err != nil {
+		log.Fatalf("bind API listener: %v", err)
+	}
+	apiPort := listener.Addr().(*net.TCPAddr).Port
 
-	go srv.StartScheduler(ctx)
-
-	httpServer := &http.Server{Addr: ":" + *port, Handler: router}
+	httpServer := &http.Server{Handler: router}
 	go func() {
-		log.Printf("Vestige-Go listening on :%s (db=%s, headless=%v)", *port, *dbPath, *headless)
-		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		log.Printf("Vestige-Go API listening on 127.0.0.1:%d (db=%s, headless=%v)", apiPort, *dbPath, *headless)
+		if err := httpServer.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("server error: %v", err)
 		}
 	}()
 
-	<-ctx.Done()
-	log.Println("shutdown signal received, shutting down gracefully...")
+	// Decoupled from OS-signal delivery on purpose — window-close and Cmd+Q/
+	// Alt+F4 are now valid shutdown triggers that were never OS signals to
+	// begin with, and both need to stop the scheduler too, not just an
+	// explicit Ctrl+C. Cancelled from inside OnShutdown below.
+	schedulerCtx, cancelScheduler := context.WithCancel(context.Background())
+	go srv.StartScheduler(schedulerCtx)
 
-	// Separate, un-cancelled context for the shutdown call itself — ctx is
-	// already Done() at this point (that's why we're here), so using it
-	// again would make Shutdown() return immediately without actually
-	// waiting for in-flight requests to finish.
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := httpServer.Shutdown(shutdownCtx); err != nil {
-		log.Printf("graceful shutdown error: %v", err)
-	}
-	log.Println("shutdown complete")
-}
+	apiService := &APIService{port: apiPort}
+	notifier := notifications.New()
 
-// applySchemaIfNewDB applies schema.sql ONLY when dbPath doesn't exist yet.
-// schema.sql's CREATE TABLE statements have no IF NOT EXISTS guard — real,
-// confirmed by reading the actual uploaded file — so unconditional
-// re-application on every launch would fail on the second run onward.
-// This is the fix: schema creation is a true one-time, first-launch event,
-// same as any real installed app's first-run DB initialization, without
-// requiring any change to schema.sql itself.
-func applySchemaIfNewDB(dbPath, schemaPath string) error {
-	if _, err := os.Stat(dbPath); err == nil {
-		log.Printf("existing database found at %s, skipping schema application", dbPath)
-		return nil
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("stat %s: %w", dbPath, err)
-	}
+	app := application.New(application.Options{
+		Name:        "Vestige",
+		Description: "Book price and availability tracker",
+		Icon:        appicon.IconPNG,
+		Services: []application.Service{
+			application.NewService(apiService),
+			application.NewService(notifier),
+		},
+		Assets: application.AssetOptions{
+			Handler: application.AssetFileServerFS(frontendassets.Assets),
+		},
+		OnShutdown: func() {
+			log.Println("shutdown requested, shutting down gracefully...")
+			cancelScheduler()
 
-	log.Printf("no database found at %s — applying schema from %s", dbPath, schemaPath)
-	schemaBytes, err := os.ReadFile(schemaPath)
-	if err != nil {
-		return fmt.Errorf("read schema file %s: %w", schemaPath, err)
-	}
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if err := httpServer.Shutdown(shutdownCtx); err != nil {
+				log.Printf("graceful shutdown error: %v", err)
+			}
+			log.Println("shutdown complete")
+		},
+	})
 
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		return fmt.Errorf("open %s: %w", dbPath, err)
-	}
-	defer db.Close()
+	app.Window.NewWithOptions(application.WebviewWindowOptions{
+		Title:  "Vestige",
+		Width:  1280,
+		Height: 800,
+		URL:    "/",
+	})
 
-	for _, stmt := range splitStatements(string(schemaBytes)) {
-		if _, err := db.Exec(stmt); err != nil {
-			return fmt.Errorf("exec statement %q: %w", stmt, err)
-		}
-	}
-	return nil
-}
+	// Route OS signals (Ctrl+C in a dev terminal, SIGTERM from a process
+	// manager) through Wails' own quit sequence rather than bypassing it —
+	// app.Quit() triggers the same OnShutdown callback above, so there's
+	// exactly one graceful-shutdown code path regardless of trigger.
+	// Started only after the window exists, not before app.Run(): Wails'
+	// own changelog documents a real nil-pointer crash class when Quit is
+	// called before Run has actually started or after Run has already
+	// returned.
+	sigCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
+	go func() {
+		<-sigCtx.Done()
+		app.Quit()
+	}()
 
-// splitStatements strips "--"-style line comments (a stray semicolon
-// inside a comment previously broke naive semicolon-splitting, per the
-// project's own documented, already-fixed schema.sql bug) then splits on
-// ";", discarding empty/whitespace-only fragments. Mirrors the exact fix
-// already applied once in cmd/dbcheck (not uploaded to this project, but
-// its fix is documented in vestige_go_migration_blueprint.md/pipeline
-// implementation notes) — reimplemented here rather than assumed shared,
-// since cmd/dbcheck's own source wasn't available to import from.
-func splitStatements(schemaSQL string) []string {
-	lines := strings.Split(schemaSQL, "\n")
-	for i, line := range lines {
-		if idx := strings.Index(line, "--"); idx >= 0 {
-			lines[i] = line[:idx]
-		}
+	if err := app.Run(); err != nil {
+		log.Fatal(err)
 	}
-	stripped := strings.Join(lines, "\n")
-
-	var out []string
-	for _, stmt := range strings.Split(stripped, ";") {
-		s := strings.TrimSpace(stmt)
-		if s != "" {
-			out = append(out, s)
-		}
-	}
-	return out
 }

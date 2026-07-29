@@ -1,0 +1,674 @@
+@import "tailwindcss";
+
+/* =========================================================================
+   Layer 1 — raw palette
+   The ONLY block to touch when re-skinning. Nothing below this block (and
+   nothing in any component/page) should ever reference a literal hex value
+   — everything goes through the semantic names in Layer 2.
+   ========================================================================= */
+:root {
+    /* Blue-centric palette derived from the Vestige logo's actual sampled
+       pixel colors (icon.png) — see the palette table in conversation for
+       exact provenance of each tone. --raw-amber-500/--raw-crimson-500 are
+       deliberately NOT sourced from the logo — they're kept as dedicated
+       semantic tokens (warning/danger) so status badges stay scannable
+       independent of the decorative theme. Previously gold/burgundy each
+       did double duty as both a decorative accent AND a status color; that
+       coupling is now split (see Layer 2 below) specifically so re-theming
+       decorative colors never again silently drags a status color with it. */
+    --raw-ink-900: #1c1c31; /* darkest navy-indigo — borders, hard shadows */
+    --raw-ink-700: #474465; /* navy-violet (logo's shadow facet) — title bars */
+    --raw-mist-50: #f7f7fa; /* lightest cool white — panels/cards */
+    --raw-mist-100: #ececf3; /* page background */
+    --raw-mist-200: #d7d7e5; /* secondary surfaces, tags */
+    --raw-teal-500: #7ca5b6; /* logo's page-stripe blue — primary accent */
+    --raw-indigo-600: #363678; /* deep indigo — secondary accent / links / focus */
+    --raw-amber-500: #c9a227; /* status: needs setup (unchanged on purpose) */
+    --raw-crimson-500: #b5482f; /* status: out of stock / error (unchanged on purpose) */
+    --raw-forest-500: #4d7c3f; /* status: in stock (unchanged on purpose) */
+    --raw-slate-500: #768297; /* logo's grey-blue — status: neutral/skip */
+}
+
+/* =========================================================================
+   Layer 2 — semantic/purpose tokens. What components actually use.
+   ========================================================================= */
+:root {
+    --color-page-bg: var(--raw-mist-100);
+    --color-panel-bg: var(--raw-mist-50);
+    --color-tag-bg: var(--raw-mist-200);
+
+    --color-ink: var(--raw-ink-900);
+    --color-titlebar-bg: var(--raw-ink-700);
+    --color-titlebar-fg: var(--raw-mist-50);
+
+    --color-heading: var(--raw-ink-900);
+    --color-body: var(--raw-ink-900);
+
+    --color-accent: var(--raw-teal-500);
+    --color-accent-strong: var(--raw-indigo-600);
+
+    /* Status colors are kept separate from the decorative accents above —
+       now genuinely separate raw tokens too (not just a comment), so they
+       carry meaning (in stock / out of stock / needs setup) and won't move
+       just because the decorative palette changes again later. */
+    --color-status-success: var(--raw-forest-500);
+    --color-status-danger: var(--raw-crimson-500);
+    --color-status-warning: var(--raw-amber-500);
+    --color-status-neutral: var(--raw-slate-500);
+
+    /* Was a hardcoded rgba(22, 36, 46, 0.55) literal on .vestige-overlay —
+       that silently wouldn't have followed --raw-ink-900 on a future re-skin.
+       Now a real token; update its rgb() triplet together with ink-900 above. */
+    --color-overlay: rgba(28, 28, 49, 0.55);
+
+    --font-ui: "Trebuchet MS", Tahoma, sans-serif;
+}
+
+/* Register Layer 2 with Tailwind so utilities exist (bg-page, text-ink, etc.).
+   IMPORTANT: every key here resolves straight to Layer 1 — never to a Layer 2
+   name that's spelled identically to the theme key itself. Writing e.g.
+   `--color-ink: var(--color-ink);` is a circular custom property (it refers
+   to itself), which is what caused the washed-out titlebars/low-contrast text
+   in the first pass: the property has no valid value to fall back to, so it
+   resolves to nothing. Layer 2's own tokens (declared further down) still
+   resolve to the exact same Layer 1 values, so re-skinning still only means
+   touching Layer 1 — this just avoids the two layers ever naming a property
+   identically. */
+@theme {
+    --color-page: var(--raw-mist-100);
+    --color-panel: var(--raw-mist-50);
+    --color-tag: var(--raw-mist-200);
+    --color-ink: var(--raw-ink-900);
+    --color-titlebar: var(--raw-ink-700);
+    --color-titlebar-fg: var(--raw-mist-50);
+    --color-heading: var(--raw-ink-900);
+    --color-accent: var(--raw-teal-500);
+    --color-accent-strong: var(--raw-indigo-600);
+    --color-success: var(--raw-forest-500);
+    --color-danger: var(--raw-crimson-500);
+    --color-warning: var(--raw-amber-500);
+    --color-neutral: var(--raw-slate-500);
+    --font-ui: "Trebuchet MS", Tahoma, sans-serif;
+
+    /* Shadow tokens reference --color-ink, so they re-skin automatically too */
+    --shadow-window: 4px 4px 0 var(--raw-ink-900);
+    --shadow-window-sm: 2px 2px 0 var(--raw-ink-900);
+}
+
+/* =========================================================================
+   Reusable chrome primitives — the repeated "window" idiom as classes, so
+   JSX doesn't copy-paste 8 utility classes on every panel.
+   ========================================================================= */
+@layer components {
+    .vestige-window {
+        background: var(--color-panel-bg);
+        border: 2px solid var(--color-ink);
+        box-shadow: var(--shadow-window);
+    }
+    .vestige-titlebar {
+        background: var(--color-titlebar-bg);
+        color: var(--color-titlebar-fg);
+        font-family: var(--font-ui);
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 5px 8px;
+        font-size: 11px;
+    }
+    /* Used for attention-needed panels (the Tracking NEEDS_SETUP banner) —
+       same chrome, swapped to the warning color instead of navy. */
+    .vestige-titlebar-warning {
+        background: var(--color-status-warning);
+        color: var(--color-ink);
+    }
+    .vestige-titlebar-actions {
+        display: flex;
+        gap: 6px;
+        text-transform: none;
+        letter-spacing: normal;
+    }
+    .vestige-btn {
+        border: 2px solid var(--color-ink);
+        box-shadow: var(--shadow-window-sm);
+        font-weight: 700;
+        font-family: var(--font-ui);
+        padding: 6px 14px;
+        cursor: pointer;
+    }
+    .vestige-pill {
+        border: 1.5px solid var(--color-ink);
+        box-shadow: var(--shadow-window-sm);
+        font-size: 10px;
+        font-weight: 700;
+        padding: 2px 8px;
+        display: inline-block;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+    }
+}
+
+/* =========================================================================
+   Global reset — flat, hard-edged everywhere. No rounded corners, no blur,
+   no gradients anywhere in this app; this single rule is what guarantees
+   that rather than relying on every component to remember it.
+   ========================================================================= */
+* {
+    border-radius: 0 !important;
+    box-sizing: border-box;
+}
+
+:root {
+    color-scheme: light;
+}
+
+body {
+    margin: 0;
+    font-family: var(--font-ui);
+    color: var(--color-body);
+    background: var(--color-page-bg);
+}
+
+/* =========================================================================
+   App shell
+   ========================================================================= */
+.app-shell {
+    display: flex;
+    height: 100vh;
+    background: var(--color-page-bg);
+    padding: 16px;
+    gap: 16px;
+}
+
+.vestige-sidebar {
+    width: 200px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+.vestige-sidebar-nav {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px;
+}
+.vestige-nav-btn {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: var(--color-panel-bg);
+    color: var(--color-ink);
+}
+.vestige-nav-btn.vestige-nav-active {
+    background: var(--color-accent);
+    transform: translate(2px, 2px);
+    box-shadow: none;
+}
+
+.main-content {
+    flex: 1;
+    overflow-y: auto;
+}
+
+.page {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+.page h2 {
+    margin: 0;
+    font-size: 1rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--color-heading);
+}
+
+.page-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+/* =========================================================================
+   Window body + heading rhythm inside one
+   ========================================================================= */
+.vestige-window-body {
+    padding: 14px 16px;
+}
+.vestige-window-body h4 {
+    margin: 1rem 0 0.5rem;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: var(--color-ink);
+}
+.vestige-window-body h4:first-child {
+    margin-top: 0;
+}
+
+/* =========================================================================
+   Forms
+   ========================================================================= */
+label {
+    display: block;
+    margin-bottom: 0.6rem;
+    font-size: 0.85rem;
+    color: var(--color-ink);
+    font-weight: 600;
+}
+label > input:not([type="checkbox"]),
+label > select {
+    display: block;
+    width: 100%;
+    max-width: 360px;
+    margin-top: 0.3rem;
+}
+input:not([type="checkbox"]),
+select,
+textarea {
+    padding: 0.4rem 0.5rem;
+    border: 2px solid var(--color-ink);
+    background: var(--color-panel-bg);
+    font-family: var(--font-ui);
+    color: var(--color-ink);
+}
+input:not([type="checkbox"]):focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+    outline: 2px solid var(--color-accent-strong);
+    outline-offset: 1px;
+}
+.checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-weight: 600;
+}
+.checkbox-label input {
+    width: auto;
+    margin: 0;
+}
+
+/* =========================================================================
+   Tables
+   ========================================================================= */
+table {
+    width: 100%;
+    border-collapse: collapse;
+}
+th,
+td {
+    text-align: left;
+    padding: 0.5rem;
+    border-bottom: 2px solid var(--color-ink);
+    font-size: 0.9rem;
+}
+th {
+    background: var(--color-tag-bg);
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+tr:last-child td {
+    border-bottom: none;
+}
+
+/* =========================================================================
+   Buttons
+   Default <button> is the primary (gold) action everywhere by default, so
+   pages don't need a className just to get the right chrome. Modifiers
+   below cover secondary/destructive/link variants.
+   ========================================================================= */
+button {
+    font-family: var(--font-ui);
+    font-weight: 700;
+    border: 2px solid var(--color-ink);
+    box-shadow: var(--shadow-window-sm);
+    background: var(--color-accent);
+    color: var(--color-ink);
+    padding: 6px 14px;
+    cursor: pointer;
+}
+button:active:not(:disabled) {
+    transform: translate(2px, 2px);
+    box-shadow: none;
+}
+button:focus-visible {
+    outline: 2px solid var(--color-accent-strong);
+    outline-offset: 2px;
+}
+button:disabled {
+    opacity: 0.55;
+    cursor: default;
+    box-shadow: none;
+    transform: none;
+}
+
+.vestige-btn-secondary {
+    background: var(--color-panel-bg);
+    color: var(--color-ink);
+}
+.vestige-btn-danger {
+    /* Was var(--color-accent-strong) — that token is now decorative indigo-blue,
+       not red, so destructive actions (Delete/Clear) are pinned to the actual
+       danger status color instead, independent of the decorative theme. */
+    background: var(--color-status-danger);
+    color: var(--color-titlebar-fg);
+}
+
+.link-button {
+    background: none;
+    border: none;
+    box-shadow: none;
+    color: var(--color-accent-strong);
+    text-decoration: underline;
+    padding: 0;
+    font-weight: 600;
+}
+.link-button:active:not(:disabled) {
+    transform: none;
+}
+
+/* Spacing for table cells that hold more than one button — written by hand
+   rather than as Tailwind utility classes, since it shouldn't depend on
+   content-scanning picking up "inline-flex"/"gap-2" as literal strings. */
+.btn-group {
+    display: inline-flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+.muted {
+    color: var(--raw-slate-500);
+    font-size: 0.85rem;
+}
+.form-error {
+    color: var(--color-status-danger);
+    font-weight: 600;
+}
+.form-success {
+    color: var(--color-status-success);
+    font-weight: 600;
+}
+
+/* =========================================================================
+   Status pills (AvailabilityBadge) — color classes here are plain Tailwind
+   utilities generated from the @theme tokens above (bg-success, bg-danger,
+   bg-warning, bg-neutral, text-ink, text-titlebar-fg); listed here only so
+   the mapping is easy to find, not because they need hand-written rules.
+   ========================================================================= */
+
+/* =========================================================================
+   Book grid (Dashboard)
+   ========================================================================= */
+.book-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 1rem;
+}
+.book-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 0.5rem;
+}
+.book-card-series {
+    color: var(--raw-slate-500);
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+.book-card-store-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.3rem 0;
+}
+
+/* =========================================================================
+   Run log
+   ========================================================================= */
+/* Composes with .vestige-titlebar (which supplies background/color/padding/
+   font) — this only overrides what a plain <button> would otherwise impose
+   (border, shadow) and adds the disclosure-widget behaviour. */
+.run-log-toggle {
+    border: none;
+    box-shadow: none;
+    width: 100%;
+    text-align: left;
+    cursor: pointer;
+}
+button.run-log-toggle:active:not(:disabled) {
+    transform: none;
+    box-shadow: none;
+}
+.run-log-history {
+    list-style: none;
+    padding: 0;
+    margin: 0.5rem 0 0;
+    font-size: 0.85rem;
+    color: var(--raw-slate-500);
+}
+
+/* =========================================================================
+   Tracking page — NEEDS_SETUP banner row + the shared selector editor block
+   ========================================================================= */
+.needs-setup-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 1rem;
+    flex-wrap: wrap;
+    padding: 0.75rem 0;
+    border-top: 2px solid var(--color-ink);
+}
+.needs-setup-row:first-child {
+    border-top: none;
+    padding-top: 0;
+}
+.selector-editor {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: center;
+    padding: 0.5rem 0;
+}
+.selector-editor input {
+    width: auto;
+    min-width: 220px;
+    margin-top: 0;
+}
+.selector-editor-row td {
+    background: var(--color-tag-bg);
+}
+
+/* =========================================================================
+   Dialog (modal) — overlay + the vestige-window used as the dialog panel
+   ========================================================================= */
+.vestige-overlay {
+    position: fixed;
+    inset: 0;
+    background: var(--color-overlay);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    z-index: 100;
+}
+.vestige-dialog {
+    width: min(420px, 100%);
+}
+.vestige-dialog-body {
+    padding: 16px;
+}
+.vestige-dialog-body p {
+    margin: 0;
+}
+.vestige-dialog-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 12px 16px;
+    border-top: 2px solid var(--color-ink);
+}
+.vestige-titlebar-close {
+    background: none;
+    border: none;
+    box-shadow: none;
+    color: var(--color-titlebar-fg);
+    font-size: 16px;
+    line-height: 1;
+    padding: 0 2px;
+    cursor: pointer;
+}
+.vestige-titlebar-close:active {
+    transform: none;
+}
+
+/* =========================================================================
+   Kebab menu (row/header overflow actions)
+   Trigger deliberately keeps the default button chrome (gold bg, ink border,
+   hard shadow) rather than a minimal/borderless style — it appears both on
+   light table-cell backgrounds and inside the dark .vestige-titlebar-actions
+   area, and the default button is the one style already proven legible on
+   both. Only padding is narrowed for the single "⋮" glyph.
+   ========================================================================= */
+.vestige-kebab {
+    position: relative;
+    display: inline-block;
+}
+.vestige-kebab-trigger {
+    padding: 4px 9px;
+    line-height: 1;
+    font-size: 14px;
+}
+.vestige-kebab-menu {
+    position: absolute;
+    right: 0;
+    top: calc(100% + 4px);
+    z-index: 20;
+    display: flex;
+    flex-direction: column;
+    min-width: 11rem;
+    background: var(--color-panel-bg);
+    border: 2px solid var(--color-ink);
+    box-shadow: var(--shadow-window);
+}
+.vestige-kebab-item {
+    background: none;
+    border: none;
+    box-shadow: none;
+    text-align: left;
+    padding: 8px 12px;
+    font-weight: 600;
+    font-family: var(--font-ui);
+    color: var(--color-ink);
+    cursor: pointer;
+}
+.vestige-kebab-item:hover,
+.vestige-kebab-item:focus-visible {
+    background: var(--color-tag-bg);
+}
+.vestige-kebab-item:active:not(:disabled) {
+    transform: none;
+}
+.vestige-kebab-item-danger {
+    color: var(--color-accent-strong);
+}
+
+/* =========================================================================
+   Series/Book detail editors (author + description) — reuses the same
+   vertical label rhythm as other forms, just scoped for inline placement
+   inside a Window body / table cell rather than a standalone form.
+   ========================================================================= */
+.series-detail-editor {
+    padding-bottom: 0.75rem;
+    margin-bottom: 0.75rem;
+    border-bottom: 2px solid var(--color-ink);
+}
+.series-detail-editor textarea,
+.series-detail-editor input {
+    max-width: 480px;
+}
+.series-detail-summary {
+    padding-bottom: 0.5rem;
+    margin-bottom: 0.5rem;
+}
+.series-detail-summary span {
+    display: block;
+    font-weight: 600;
+    color: var(--color-ink);
+}
+.series-detail-summary p {
+    margin: 0.25rem 0 0;
+}
+
+.truncate-cell {
+    max-width: 22rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* =========================================================================
+   Backend-readiness gate
+   ========================================================================= */
+.backend-gate-wrap {
+    flex: 1;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.backend-gate {
+    width: min(420px, 100%);
+}
+.backend-gate-body {
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    align-items: center;
+}
+
+.docker-terminal {
+    background: var(--color-titlebar-bg);
+    color: var(--color-titlebar-fg);
+    font-family: "Consolas", "Courier New", monospace;
+    font-size: 0.85rem;
+    line-height: 1.5;
+    padding: 1rem;
+    border: 2px solid var(--color-ink);
+    box-shadow: var(--shadow-window-sm);
+    white-space: pre-wrap;
+    max-height: 260px;
+    overflow-y: auto;
+}
+
+.docker-loader {
+    width: 100%;
+    height: 12px;
+    border: 2px solid var(--color-ink);
+    overflow: hidden;
+    position: relative;
+    margin-bottom: 0.75rem;
+}
+.docker-loader::after {
+    content: "";
+    position: absolute;
+    width: 40%;
+    height: 100%;
+    background: var(--color-accent);
+    animation: docker-marquee 1.2s ease-in-out infinite;
+}
+
+@keyframes docker-marquee {
+    0% {
+        left: -40%;
+    }
+    100% {
+        left: 100%;
+    }
+}
