@@ -47,25 +47,13 @@ jobs:
         run: choco install nsis -y
 
       - name: Resolve pinned wails3 CLI onto PATH
-        # go.mod's `tool` directive pins wails3 to v3.0.0-alpha2.118 (matching
-        # the `require` block exactly — added via `go get -tool ...@version`).
-        # `go tool -n wails3` builds it from that pinned module (if not already
-        # cached) and prints the resulting binary's path — no `go install
-        # ...@latest` anywhere, so this can't drift between runs.
-        #
-        # It's copied onto PATH (not just left as `go tool wails3`) because
-        # several of this repo's own Taskfile recipes (generate:bindings,
-        # generate:icons, tool sign, etc.) shell out to a bare `wails3` command
-        # internally — those subprocess calls need it resolvable by name, not
-        # just invocable via `go tool`.
-        shell: bash
+        shell: pwsh
         run: |
-          set -euo pipefail
-          BIN_PATH="$(go tool -n wails3)"
-          DEST_DIR="$HOME/.local/bin"
-          mkdir -p "$DEST_DIR"
-          cp "$BIN_PATH" "$DEST_DIR/$(basename "$BIN_PATH")"
-          echo "$DEST_DIR" >> "$GITHUB_PATH"
+          $binPath = go tool -n wails3
+          $destDir = "$env:USERPROFILE\.local\bin"
+          New-Item -ItemType Directory -Force -Path $destDir | Out-Null
+          Copy-Item $binPath "$destDir\wails3.exe" -Force
+          Add-Content -Path $env:GITHUB_PATH -Value $destDir
 
       # Cheap sanity check — surfaces a missing dependency with a clear message
       # instead of a confusing failure three steps later inside `task package`.
