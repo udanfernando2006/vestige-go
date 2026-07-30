@@ -1,13 +1,13 @@
 [Desktop Entry]
 Version=1.0
-Name=My Product
-Comment=A scratchtest application
+Name=Vestige Go
+Comment=Book price and availability tracker — Go/Wails desktop rewrite
 # The Exec line includes %u to pass the URL to the application
-Exec=/usr/local/bin/scratchtest.exe %u
+Exec=/usr/local/bin/vestige-go %u
 Terminal=false
 Type=Application
-Icon=scratchtest.exe
+Icon=vestige-go
 Categories=Utility;
-StartupWMClass=scratchtest.exe
+StartupWMClass=vestige-go
 
  

@@ -10,13 +10,20 @@
 --     no bootstrap-file table. Custom stock regex patterns live as ordinary rows in
 --     setting_overrides, same as every other setting key — no schema change needed for
 --     that decision, since setting_overrides was already a flat key/value table in v1.
+--
+-- All CREATE TABLE / CREATE INDEX statements use IF NOT EXISTS for defense-in-depth
+-- idempotency beyond the app-level "only apply schema if the DB file is missing" guard.
+-- This does NOT substitute for the still-open migration-tooling decision above — it
+-- guards against re-running this file against an existing DB, not against evolving an
+-- existing table's columns (a later ALTER TABLE-worthy change still needs real migration
+-- tooling to reach a live DB with data already in it).
 
 PRAGMA foreign_keys = ON;
 
 -- =============================================================================
 -- series
 -- =============================================================================
-CREATE TABLE series (
+CREATE TABLE IF NOT EXISTS series (
     id          INTEGER PRIMARY KEY,   -- SQLite INTEGER PRIMARY KEY == rowid alias,
                                         -- behaves like BigInteger autoincrement
     name        TEXT NOT NULL UNIQUE,
@@ -27,7 +34,7 @@ CREATE TABLE series (
 -- =============================================================================
 -- books
 -- =============================================================================
-CREATE TABLE books (
+CREATE TABLE IF NOT EXISTS books (
     id              INTEGER PRIMARY KEY,
     name            TEXT NOT NULL,
     isbn            TEXT NOT NULL UNIQUE,
@@ -39,12 +46,12 @@ CREATE TABLE books (
     series_id       INTEGER REFERENCES series(id)  -- nullable FK, matches Optional[int]
 );
 
-CREATE INDEX idx_books_series_id ON books(series_id);
+CREATE INDEX IF NOT EXISTS idx_books_series_id ON books(series_id);
 
 -- =============================================================================
 -- stores
 -- =============================================================================
-CREATE TABLE stores (
+CREATE TABLE IF NOT EXISTS stores (
     id                  INTEGER PRIMARY KEY,
     name                TEXT NOT NULL UNIQUE,
     base_url            TEXT NOT NULL,
@@ -54,7 +61,7 @@ CREATE TABLE stores (
 -- =============================================================================
 -- tracking_pairs
 -- =============================================================================
-CREATE TABLE tracking_pairs (
+CREATE TABLE IF NOT EXISTS tracking_pairs (
     id                 INTEGER PRIMARY KEY,
     book_id            INTEGER NOT NULL REFERENCES books(id),
     store_id           INTEGER NOT NULL REFERENCES stores(id),
@@ -67,14 +74,14 @@ CREATE TABLE tracking_pairs (
     UNIQUE (book_id, store_id)   -- uq_book_store, same composite constraint as v1
 );
 
-CREATE INDEX idx_tracking_pairs_book_id ON tracking_pairs(book_id);
-CREATE INDEX idx_tracking_pairs_store_id ON tracking_pairs(store_id);
-CREATE INDEX idx_tracking_pairs_status ON tracking_pairs(status);
+CREATE INDEX IF NOT EXISTS idx_tracking_pairs_book_id ON tracking_pairs(book_id);
+CREATE INDEX IF NOT EXISTS idx_tracking_pairs_store_id ON tracking_pairs(store_id);
+CREATE INDEX IF NOT EXISTS idx_tracking_pairs_status ON tracking_pairs(status);
 
 -- =============================================================================
 -- availability_snapshots
 -- =============================================================================
-CREATE TABLE availability_snapshots (
+CREATE TABLE IF NOT EXISTS availability_snapshots (
     id          INTEGER PRIMARY KEY,
     pair_id     INTEGER NOT NULL REFERENCES tracking_pairs(id),
     in_stock    INTEGER,   -- nullable boolean (0/1/NULL) — Optional[bool] in Python
@@ -94,12 +101,12 @@ CREATE TABLE availability_snapshots (
 );
 
 -- Direct port of models.py's Index("idx_pair_scraped_desc", pair_id, scraped_at.desc())
-CREATE INDEX idx_pair_scraped_desc ON availability_snapshots(pair_id, scraped_at DESC);
+CREATE INDEX IF NOT EXISTS idx_pair_scraped_desc ON availability_snapshots(pair_id, scraped_at DESC);
 
 -- =============================================================================
 -- setting_overrides
 -- =============================================================================
-CREATE TABLE setting_overrides (
+CREATE TABLE IF NOT EXISTS setting_overrides (
     key          TEXT PRIMARY KEY,
     value        TEXT NOT NULL,
     is_encrypted INTEGER NOT NULL DEFAULT 0

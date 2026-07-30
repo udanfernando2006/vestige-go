@@ -31,8 +31,16 @@ Unicode true
 ## !define REQUEST_EXECUTION_LEVEL "admin"            # Default "admin"  see also https://nsis.sourceforge.io/Docs/Chapter4.html
 ## !define WAILS_INSTALL_SCOPE     "user"             # Default "machine" - set to "user" for per-user install ($LOCALAPPDATA) without UAC prompt
 ####
-## Include the wails tools
+## !include the wails tools
 ####
+!define INFO_PROJECTNAME "vestige-go" # Overriding the stale "scratchtest" value
+                                        # wails_tools.nsh was otherwise inferring
+                                        # (leftover from this repo's original
+                                        # scaffold, before it was renamed) —
+                                        # affects both OutFile's installer
+                                        # filename and PRODUCT_EXECUTABLE's
+                                        # default, which is why this is defined
+                                        # here rather than patched per-symptom.
 !include "wails_tools.nsh"
 
 # The version information for this two must consist of 4 parts
@@ -92,6 +100,15 @@ Section
     SetOutPath $INSTDIR
     
     !insertmacro wails.files
+
+    # Bundled, version-pinned headless-shell (blueprint §7 item 10) — placed
+    # by the `common:vendor:chromium` Taskfile task at bin/chromium/ before
+    # this installer is built. Lands at $INSTDIR\chromium\headless-shell.exe,
+    # matching internal/browser/session.go's bundledChromiumExecPath(), which
+    # resolves this path relative to the installed app's own executable.
+    SetOutPath $INSTDIR\chromium
+    File "..\..\..\bin\chromium\headless-shell.exe"
+    SetOutPath $INSTDIR
 
     CreateShortcut "$SMPROGRAMS\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}"
     CreateShortCut "$DESKTOP\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}"

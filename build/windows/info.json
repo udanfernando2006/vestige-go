@@ -5,11 +5,11 @@
 	"info": {
 		"0000": {
 			"ProductVersion": "0.1.0",
-			"CompanyName": "My Company",
-			"FileDescription": "A scratchtest application",
-			"LegalCopyright": "© 2026, My Company",
-			"ProductName": "My Product",
-			"Comments": "This is a comment"
+			"CompanyName": "Udan Fernando",
+			"FileDescription": "Book price and availability tracker — Go/Wails desktop rewrite",
+			"LegalCopyright": "(c) 2026, Udan Fernando",
+			"ProductName": "Vestige Go",
+			"Comments": "Second flagship rewrite of Vestige — Go, SQLite, no Docker"
 		}
 	}
 }

@@ -1,0 +1,142 @@
+name: Build Desktop App (Windows)
+
+# Windows-only, per project decision: Linux and macOS dropped from the release
+# scope (can't be meaningfully tested locally; learning-project tradeoff, not
+# a technical blocker). NSIS installer, not MSI — no WiX toolchain is set up
+# in this repo, and NSIS needs nothing beyond `makensis` (installed below).
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"] # e.g. v0.1.0 — triggers the release job below in addition to the build job
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write # required for the release job's softprops/action-gh-release step
+
+env:
+  GO_VERSION: "1.26"
+  NODE_VERSION: "22"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Go module cache, keyed on go.sum.
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      # npm cache — path matters here since package.json/lockfile live under
+      # frontend/, not repo root (per build/Taskfile.yml's `dir: frontend`).
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # NOT guaranteed present on windows-latest as of the 2025+ runner image
+      # generation (NSIS was dropped from the default image) — install explicitly
+      # rather than relying on it being there.
+      - name: Install NSIS
+        shell: pwsh
+        run: choco install nsis -y
+
+      - name: Resolve pinned wails3 CLI onto PATH
+        # go.mod's `tool` directive pins wails3 to v3.0.0-alpha2.118 (matching
+        # the `require` block exactly — added via `go get -tool ...@version`).
+        # `go tool -n wails3` builds it from that pinned module (if not already
+        # cached) and prints the resulting binary's path — no `go install
+        # ...@latest` anywhere, so this can't drift between runs.
+        #
+        # It's copied onto PATH (not just left as `go tool wails3`) because
+        # several of this repo's own Taskfile recipes (generate:bindings,
+        # generate:icons, tool sign, etc.) shell out to a bare `wails3` command
+        # internally — those subprocess calls need it resolvable by name, not
+        # just invocable via `go tool`.
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN_PATH="$(go tool -n wails3)"
+          DEST_DIR="$HOME/.local/bin"
+          mkdir -p "$DEST_DIR"
+          cp "$BIN_PATH" "$DEST_DIR/$(basename "$BIN_PATH")"
+          echo "$DEST_DIR" >> "$GITHUB_PATH"
+
+      # Cheap sanity check — surfaces a missing dependency with a clear message
+      # instead of a confusing failure three steps later inside `task package`.
+      - name: wails3 doctor
+        run: wails3 doctor
+
+      # Downloads the pinned Chrome for Testing headless-shell build to
+      # bin/chromium/headless-shell.exe — must run before `task package` so
+      # project.nsi's `File "..\..\..\bin\chromium\headless-shell.exe"`
+      # directive has something to embed. See build/Taskfile.yml's
+      # `vendor:chromium` task for the pinned version and download logic.
+      - name: Vendor pinned chromium headless-shell
+        shell: bash
+        run: wails3 task common:vendor:chromium GOOS=windows
+
+      - name: Package
+        run: wails3 task package
+        env:
+          PACKAGE_MANAGER: npm
+
+      # Debug aid for the first few runs — confirms real output paths/filenames
+      # before trusting the artifact glob below.
+      - name: List build output
+        shell: bash
+        run: |
+          echo "--- bin/ ---"; find bin -maxdepth 3 2>/dev/null || true
+          echo "--- build/windows/nsis/ ---"; find build/windows/nsis -maxdepth 1 2>/dev/null || true
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: vestige-go-windows
+          path: build/windows/nsis/*.exe
+          if-no-files-found: error
+
+  release:
+    # Only runs on a version-tag push (not on every branch push/PR), and only
+    # after the build job above has succeeded.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: vestige-go-windows
+          path: release-assets
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*
+          # draft: true            # uncomment for your first few tags, to review before it's public
+          generate_release_notes: true
+
+# --- Deliberately left out of this file ---
+#
+# 1. Code signing. The NSIS installer is UNSIGNED by default — anyone
+#    downloading it will hit a SmartScreen warning. Real distribution needs
+#    an Authenticode certificate (`sign:installer` task in
+#    build/windows/Taskfile.yml already supports this once you have one) —
+#    a real cost (cert purchase), not just CI config. Worth deciding
+#    deliberately rather than discovering the warning screen after the fact.
+#
+# 2. arm64 builds. This workflow only builds windows/amd64 (the runner's
+#    native arch). arm64 cross-compilation needs CGO_ENABLED=1 routed through
+#    the wails-cross Docker image per build/windows/Taskfile.yml's
+#    build:docker task (`task setup:docker`, ~800MB) — separate, heavier
+#    work, worth adding only if you actually need to support Windows-on-ARM.
+#
+# 3. Linux and macOS. Deliberately dropped — see the top-of-file note.
+#    Revisit if that changes; the earlier three-OS matrix version of this
+#    workflow (with Linux AppImage + macOS .app zip) is recoverable from
+#    conversation history if needed later.

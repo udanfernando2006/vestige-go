@@ -189,17 +189,26 @@ tasks:
       - wails3 generate bindings ./cmd/vestige -f '{{.BUILD_FLAGS}}' -clean=true{{if eq .OBFUSCATED "true"}} -obfuscated{{end}} -ts -i
 
   generate:icons:
-    summary: Generates Windows `.ico` and Mac `.icns` from an image; on macOS, `-iconcomposerinput appicon.icon -macassetdir darwin` also produces `Assets.car` from a `.icon` file (skipped on other platforms).
+    summary: Generates Windows `.ico` from an image.
+    # wails3 generate icons has NO flag to skip macOS .icns generation — it's
+    # unconditional (confirmed via `wails3 generate icons --help`: -macfilename
+    # defaults to "build/darwin/icon.icns" even when omitted). This task's own
+    # `dir: build` means that default resolves to the nonexistent
+    # build/build/darwin/icon.icns, so -macfilename is kept explicitly here —
+    # NOT to actually produce a usable mac icon (Linux/macOS are dropped from
+    # this project's release scope), just to redirect the unavoidable write
+    # somewhere that exists and is harmless. build/darwin/ must exist (an
+    # empty dir + .gitkeep is enough — Git doesn't track empty folders) or
+    # this still fails with a path-not-found error.
     run: once
     dir: build
     sources:
       - "appicon.png"
-      - "appicon.icon"
     generates:
-      - "darwin/icons.icns"
       - "windows/icon.ico"
+      - "darwin/icon.icns" # unused output, kept only because the tool always writes it
     cmds:
-      - wails3 generate icons -input appicon.png -macfilename darwin/icons.icns -windowsfilename windows/icon.ico -iconcomposerinput appicon.icon -macassetdir darwin
+      - wails3 generate icons -input appicon.png -windowsfilename windows/icon.ico -macfilename darwin/icon.icns
 
   dev:frontend:
     summary: Runs the frontend in development mode
@@ -334,3 +343,40 @@ tasks:
     preconditions:
       - sh: docker info > /dev/null 2>&1
         msg: "Docker is required. Please install Docker first."
+
+  # --- Chromium bundling (blueprint §7 item 10 — resolved: bundle at build time) ---
+  #
+  # Windows-only, matching the project's current release scope (Linux/macOS
+  # dropped). Downloads the pinned Chrome for Testing headless-shell build
+  # and extracts it to bin/chromium/headless-shell.exe — the exact relative
+  # layout internal/browser/session.go's bundledChromiumExecPath() expects
+  # next to the installed application's own executable, and the exact path
+  # project.nsi's `File` directive embeds into the NSIS installer.
+  vendor:chromium:
+    summary: Downloads the pinned headless-shell build (Windows only)
+    vars:
+      # Pinned to a confirmed Chrome for Testing "known-good" version — every
+      # platform's chrome-headless-shell asset verified present at this
+      # version. NOT the same as whatever system Chrome chromedp might
+      # auto-detect locally if no bundle is present — update this single
+      # value to re-pin deliberately.
+      CHROMIUM_VERSION: '{{.CHROMIUM_VERSION | default "150.0.7871.49"}}'
+      DEST_DIR: "{{.BIN_DIR}}/chromium"
+      ZIP_NAME: "chrome-headless-shell-win64.zip"
+      DOWNLOAD_URL: "https://storage.googleapis.com/chrome-for-testing-public/{{.CHROMIUM_VERSION}}/win64/{{.ZIP_NAME}}"
+    status:
+      - test "$(cat {{.DEST_DIR}}/.version 2>/dev/null)" = "{{.CHROMIUM_VERSION}}"
+    cmds:
+      - mkdir -p "{{.DEST_DIR}}"
+      - curl -fsSL "{{.DOWNLOAD_URL}}" -o "{{.BIN_DIR}}/{{.ZIP_NAME}}"
+      - cmd: |
+          unzip -oq "{{.BIN_DIR}}/{{.ZIP_NAME}}" -d "{{.BIN_DIR}}"
+          cp "{{.BIN_DIR}}/chrome-headless-shell-win64/chrome-headless-shell.exe" "{{.DEST_DIR}}/headless-shell.exe"
+          rm -rf "{{.BIN_DIR}}/chrome-headless-shell-win64" "{{.BIN_DIR}}/{{.ZIP_NAME}}"
+        platforms: [linux, darwin] # covers the GitHub Actions runner (bash) and any WSL/git-bash local run
+      - cmd: |
+          powershell -NoProfile -Command "Expand-Archive -Path '{{.BIN_DIR}}/{{.ZIP_NAME}}' -DestinationPath '{{.BIN_DIR}}' -Force"
+          powershell -NoProfile -Command "Copy-Item '{{.BIN_DIR}}/chrome-headless-shell-win64/chrome-headless-shell.exe' '{{.DEST_DIR}}/headless-shell.exe' -Force"
+          powershell -NoProfile -Command "Remove-Item -Recurse -Force '{{.BIN_DIR}}/chrome-headless-shell-win64', '{{.BIN_DIR}}/{{.ZIP_NAME}}'"
+        platforms: [windows] # native PowerShell (e.g. a plain `task` invocation outside git-bash)
+      - echo "{{.CHROMIUM_VERSION}}" > "{{.DEST_DIR}}/.version"

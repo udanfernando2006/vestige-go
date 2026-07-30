@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -117,6 +119,38 @@ type ChromedpSession struct {
 	timeout         time.Duration
 }
 
+// bundledChromiumExecPath looks for a pinned headless-shell binary shipped
+// alongside the running executable, under a `chromium/` subdirectory —
+// e.g. <install-dir>/chromium/headless-shell(.exe). Returns "" if not
+// found, NOT an error: this keeps `wails3 task dev`/any unpackaged local
+// run working exactly as before (chromedp's own default discovery,
+// whatever Chrome/Edge/Chromium happens to be on the dev machine), while
+// a real packaged build — which the packaging step is expected to place
+// the pinned binary into — gets a deterministic, frozen version instead.
+//
+// NOT yet wired into any OS's packaging Taskfile (create:app:bundle,
+// create:nsis:installer, create:deb, etc.) — this only makes the Go side
+// consume a bundled binary if one is placed at this relative path; the
+// download-and-place-it-there step is separate, still open work.
+func bundledChromiumExecPath() string {
+	exePath, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	exeDir := filepath.Dir(exePath)
+
+	binName := "headless-shell"
+	if runtime.GOOS == "windows" {
+		binName = "headless-shell.exe"
+	}
+
+	candidate := filepath.Join(exeDir, "chromium", binName)
+	if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+		return candidate
+	}
+	return ""
+}
+
 // NewSession initializes a new top-level ChromedpSession with a dedicated allocator.
 func NewSession(parent context.Context, headless bool, timeout time.Duration) (*ChromedpSession, error) {
 	// NOTE: chromedp.NoSandbox is explicitly added for container/headless environments
@@ -156,6 +190,21 @@ func NewSession(parent context.Context, headless bool, timeout time.Duration) (*
 		chromedp.Flag("disable-blink-features", "AutomationControlled"),
 		chromedp.WindowSize(1920, 1080),
 	)
+
+	// Point at the bundled, version-pinned headless-shell — but only in
+	// headless mode. headless-shell is a stripped binary with no windowed
+	// UI at all, so it isn't a valid target for non-headless runs; those
+	// keep chromedp's normal system-browser discovery unconditionally,
+	// same as before this bundling work existed. In headless mode, if the
+	// packaging step placed a bundled binary, use it; otherwise fall
+	// through to system discovery same as today (unpackaged local dev, or
+	// a packaged build that genuinely has no bundle for some reason — this
+	// degrades gracefully rather than failing outright).
+	if headless {
+		if execPath := bundledChromiumExecPath(); execPath != "" {
+			opts = append(opts, chromedp.ExecPath(execPath))
+		}
+	}
 
 	if headless {
 		opts = append(opts, chromedp.Flag("headless", "new"))
