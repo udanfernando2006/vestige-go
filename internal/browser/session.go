@@ -203,11 +203,9 @@ func NewSession(parent context.Context, headless bool, timeout time.Duration) (*
 	if headless {
 		if execPath := bundledChromiumExecPath(); execPath != "" {
 			opts = append(opts, chromedp.ExecPath(execPath))
+		} else {
+			opts = append(opts, chromedp.Flag("headless", "new"))
 		}
-	}
-
-	if headless {
-		opts = append(opts, chromedp.Flag("headless", "new"))
 	} else {
 		opts = append(opts, chromedp.Flag("headless", false))
 	}

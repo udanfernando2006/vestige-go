@@ -107,7 +107,7 @@ Section
     # matching internal/browser/session.go's bundledChromiumExecPath(), which
     # resolves this path relative to the installed app's own executable.
     SetOutPath $INSTDIR\chromium
-    File "..\..\..\bin\chromium\headless-shell.exe"
+    File /r "..\..\..\bin\chromium\*.*"
     SetOutPath $INSTDIR
 
     CreateShortcut "$SMPROGRAMS\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}"
@@ -122,9 +122,29 @@ SectionEnd
 Section "uninstall" 
     !insertmacro wails.setShellContext
 
-    RMDir /r "$AppData\${PRODUCT_EXECUTABLE}" # Remove the WebView2 DataPath
+    RMDir /r "$AppData\${PRODUCT_EXECUTABLE}" # Remove WebView2 cache
 
-    RMDir /r $INSTDIR
+    # Ask the user if they want to delete their database & settings
+    MessageBox MB_YESNO|MB_ICONQUESTION "Do you want to delete your user database (vestige.db) and settings?" IDYES delete_data IDNO keep_data
+
+delete_data:
+    Delete "$INSTDIR\vestige.db"
+    Delete "$INSTDIR\.vestige-go-keys"
+    RMDir /r "$INSTDIR\logs"
+    RMDir /r "$INSTDIR\logs-live"
+    Goto done_data
+
+keep_data:
+    # User chose No — leave vestige.db and settings intact
+
+done_data:
+
+    # Always remove application binaries and bundled assets
+    Delete "$INSTDIR\${PRODUCT_EXECUTABLE}"
+    RMDir /r "$INSTDIR\chromium"
+
+    # RMDir (without /r) only removes $INSTDIR if empty (leaves vestige.db if kept)
+    RMDir $INSTDIR
 
     Delete "$SMPROGRAMS\${INFO_PRODUCTNAME}.lnk"
     Delete "$DESKTOP\${INFO_PRODUCTNAME}.lnk"
@@ -134,3 +154,4 @@ Section "uninstall"
 
     !insertmacro wails.deleteUninstaller
 SectionEnd
+

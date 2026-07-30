@@ -58,3 +58,7 @@ pnpm-debug.log*
 
 # Task Tool Cache
 .task/
+
+# Build output & Vendored assets
+/bin/
+*.pak

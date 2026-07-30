@@ -376,7 +376,9 @@ tasks:
         platforms: [linux, darwin] # covers the GitHub Actions runner (bash) and any WSL/git-bash local run
       - cmd: |
           powershell -NoProfile -Command "Expand-Archive -Path '{{.BIN_DIR}}/{{.ZIP_NAME}}' -DestinationPath '{{.BIN_DIR}}' -Force"
-          powershell -NoProfile -Command "Copy-Item '{{.BIN_DIR}}/chrome-headless-shell-win64/chrome-headless-shell.exe' '{{.DEST_DIR}}/headless-shell.exe' -Force"
+          powershell -NoProfile -Command "Copy-Item '{{.BIN_DIR}}/chrome-headless-shell-win64/*' '{{.DEST_DIR}}/' -Recurse -Force"
+          powershell -NoProfile -Command "Copy-Item '{{.DEST_DIR}}/chrome-headless-shell.exe' '{{.DEST_DIR}}/headless-shell.exe' -Force"
+          powershell -NoProfile -Command "& { \$b = [System.IO.File]::ReadAllBytes('{{.DEST_DIR}}/headless-shell.exe'); \$off = [BitConverter]::ToInt32(\$b, 0x3C) + 0x5C; if ([BitConverter]::ToUInt16(\$b, \$off) -eq 3) { \$b[\$off] = 2; [System.IO.File]::WriteAllBytes('{{.DEST_DIR}}/headless-shell.exe', \$b) } }"
           powershell -NoProfile -Command "Remove-Item -Recurse -Force '{{.BIN_DIR}}/chrome-headless-shell-win64', '{{.BIN_DIR}}/{{.ZIP_NAME}}'"
-        platforms: [windows] # native PowerShell (e.g. a plain `task` invocation outside git-bash)
+        platforms: [windows]
       - echo "{{.CHROMIUM_VERSION}}" > "{{.DEST_DIR}}/.version"
