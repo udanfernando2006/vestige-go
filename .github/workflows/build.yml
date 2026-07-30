@@ -81,24 +81,37 @@ jobs:
         shell: bash
         run: wails3 task common:vendor:chromium GOOS=windows
 
-      - name: Package
+      # Step 1: Package Development / Debug Build (terminal logs enabled)
+      - name: Package (Development / Debug)
+        run: wails3 task package DEV=true
+        env:
+          PACKAGE_MANAGER: npm
+
+      - name: Rename Development Installer
+        shell: bash
+        run: mv bin/vestige-go-*-installer.exe bin/vestige-go-dev-installer.exe
+
+      # Step 2: Package Production Build (standard name, silent)
+      - name: Package (Production)
         run: wails3 task package
         env:
           PACKAGE_MANAGER: npm
 
-      # Debug aid for the first few runs — confirms real output paths/filenames
-      # before trusting the artifact glob below.
+      # Debug aid to list output installers
       - name: List build output
         shell: bash
         run: |
-          echo "--- bin/ ---"; find bin -maxdepth 3 2>/dev/null || true
-          echo "--- build/windows/nsis/ ---"; find build/windows/nsis -maxdepth 1 2>/dev/null || true
+          echo "--- Installers in bin/ ---"
+          ls -la bin/*installer.exe
 
+      # Step 3: Upload both installers as build artifacts
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: vestige-go-windows
-          path: build/windows/nsis/*.exe
+          path: |
+            bin/vestige-go-*-installer.exe
+            bin/vestige-go-dev-installer.exe
           if-no-files-found: error
 
   release:
