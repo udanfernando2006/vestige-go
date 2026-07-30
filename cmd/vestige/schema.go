@@ -1,27 +1,14 @@
 package main
-
 import (
 	"database/sql"
+	_ "embed"
 	"fmt"
 	"log"
 	"os"
 	"strings"
 )
-
-// applySchemaIfNewDB applies schema.sql ONLY when dbPath doesn't exist yet.
-// schema.sql's CREATE TABLE statements have no IF NOT EXISTS guard — real,
-// confirmed by reading the actual uploaded file — so unconditional
-// re-application on every launch would fail on the second run onward.
-// This is the fix: schema creation is a true one-time, first-launch event,
-// same as any real installed app's first-run DB initialization, without
-// requiring any change to schema.sql itself.
-//
-// Shared (no build tag) between main.go (desktop) and main_server.go
-// (server mode) — both need identical schema-bootstrap behavior, and this
-// function's signature has no Wails-specific or otherwise-uncertain types
-// in it, so sharing it carries no risk of guessing a wrong type across the
-// two entrypoints the way the rest of their setup (store/pipeline/router
-// construction) would.
+//go:embed schema.sql
+var defaultSchemaSQL string
 func applySchemaIfNewDB(dbPath, schemaPath string) error {
 	if _, err := os.Stat(dbPath); err == nil {
 		log.Printf("existing database found at %s, skipping schema application", dbPath)
@@ -29,19 +16,21 @@ func applySchemaIfNewDB(dbPath, schemaPath string) error {
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("stat %s: %w", dbPath, err)
 	}
-
-	log.Printf("no database found at %s — applying schema from %s", dbPath, schemaPath)
-	schemaBytes, err := os.ReadFile(schemaPath)
-	if err != nil {
-		return fmt.Errorf("read schema file %s: %w", schemaPath, err)
+	log.Printf("no database found at %s — applying schema", dbPath)
+	var schemaBytes []byte
+	var err error
+	if schemaPath != "" {
+		schemaBytes, err = os.ReadFile(schemaPath)
 	}
-
+	if err != nil || schemaPath == "" {
+		log.Printf("schema file %s not found on disk (or unreadable); using embedded schema fallback", schemaPath)
+		schemaBytes = []byte(defaultSchemaSQL)
+	}
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return fmt.Errorf("open %s: %w", dbPath, err)
 	}
 	defer db.Close()
-
 	for _, stmt := range splitStatements(string(schemaBytes)) {
 		if _, err := db.Exec(stmt); err != nil {
 			return fmt.Errorf("exec statement %q: %w", stmt, err)
