@@ -24,7 +24,8 @@ tasks:
     generates:
       - node_modules
     preconditions:
-      - sh: npm version
+      # `which` avoids needing Git Bash / sh.exe (plain Windows pwsh has npm.cmd on PATH).
+      - which: npm
         msg: "Looks like npm isn't installed. Npm is part of the Node installer: https://nodejs.org/en/download/"
     cmds:
       - npm install
@@ -364,10 +365,21 @@ tasks:
       DEST_DIR: "{{.BIN_DIR}}/chromium"
       ZIP_NAME: "chrome-headless-shell-win64.zip"
       DOWNLOAD_URL: "https://storage.googleapis.com/chrome-for-testing-public/{{.CHROMIUM_VERSION}}/win64/{{.ZIP_NAME}}"
+    # Status/mkdir/version-write are platform-split on purpose: wails3 ships
+    # Task v3.40.x, which predates TASK_CORE_UTILS (mkdir/cat/test on Windows).
+    # Without Git usr\bin on PATH, Unix forms fail with exit 127 under plain pwsh.
     status:
-      - test "$(cat {{.DEST_DIR}}/.version 2>/dev/null)" = "{{.CHROMIUM_VERSION}}"
+      - |
+        {{if eq OS "windows"}}
+        powershell -NoProfile -Command "\$p = Join-Path '{{.DEST_DIR}}' '.version'; if (-not (Test-Path -LiteralPath \$p)) { exit 1 }; if ((Get-Content -LiteralPath \$p -Raw).Trim() -ne '{{.CHROMIUM_VERSION}}') { exit 1 }"
+        {{else}}
+        test "$(cat {{.DEST_DIR}}/.version 2>/dev/null)" = "{{.CHROMIUM_VERSION}}"
+        {{end}}
     cmds:
-      - mkdir -p "{{.DEST_DIR}}"
+      - cmd: mkdir -p "{{.DEST_DIR}}"
+        platforms: [linux, darwin]
+      - cmd: powershell -NoProfile -Command "New-Item -ItemType Directory -Force -Path '{{.DEST_DIR}}' | Out-Null"
+        platforms: [windows]
       - curl -fsSL "{{.DOWNLOAD_URL}}" -o "{{.BIN_DIR}}/{{.ZIP_NAME}}"
       - cmd: |
           unzip -oq "{{.BIN_DIR}}/{{.ZIP_NAME}}" -d "{{.BIN_DIR}}"
@@ -381,4 +393,7 @@ tasks:
           powershell -NoProfile -Command "& { \$b = [System.IO.File]::ReadAllBytes('{{.DEST_DIR}}/headless-shell.exe'); \$off = [BitConverter]::ToInt32(\$b, 0x3C) + 0x5C; if ([BitConverter]::ToUInt16(\$b, \$off) -eq 3) { \$b[\$off] = 2; [System.IO.File]::WriteAllBytes('{{.DEST_DIR}}/headless-shell.exe', \$b) } }"
           powershell -NoProfile -Command "Remove-Item -Recurse -Force '{{.BIN_DIR}}/chrome-headless-shell-win64', '{{.BIN_DIR}}/{{.ZIP_NAME}}'"
         platforms: [windows]
-      - echo "{{.CHROMIUM_VERSION}}" > "{{.DEST_DIR}}/.version"
+      - cmd: echo "{{.CHROMIUM_VERSION}}" > "{{.DEST_DIR}}/.version"
+        platforms: [linux, darwin]
+      - cmd: powershell -NoProfile -Command "Set-Content -LiteralPath '{{.DEST_DIR}}/.version' -Value '{{.CHROMIUM_VERSION}}' -NoNewline -Encoding ascii"
+        platforms: [windows]
