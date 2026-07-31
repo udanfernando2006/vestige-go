@@ -22,9 +22,7 @@ const (
 	keyringUser    = "settings-encryption-key"
 
 	// fallbackFileName lives under whatever directory the caller passes as
-	// fallbackDir (expected to be the app's data directory once Wails'
-	// actual app_data_dir() equivalent is wired up in Phase 3 — not decided
-	// here, this package just takes a directory string).
+	// fallbackDir (cmd/vestige defaults this to <UserCacheDir>/VestigeGo/keys).
 	fallbackFileName = "settings.key"
 )
 
@@ -77,8 +75,8 @@ func (k KeySource) String() string {
 //     returned "not found"; that case still writes to the keychain.
 //
 // fallbackDir must already exist or be creatable by the caller — this
-// function does not decide what that directory is (that's the Wails
-// app_data_dir() question, not yet wired up).
+// function does not decide what that directory is (cmd/vestige supplies
+// the default via defaultDataDir).
 func LoadOrGenerateKey(fallbackDir string) (keyB64 string, source KeySource, err error) {
 	// --- Attempt 1: OS keychain ---
 	existing, kerr := keyring.Get(keyringService, keyringUser)

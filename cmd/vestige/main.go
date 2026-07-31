@@ -42,16 +42,11 @@
 //     specifically because window-close/Cmd+Q are now valid shutdown
 //     triggers that were never OS signals to begin with.
 //
-// FLAGGED PLACEHOLDERS, not silently baked in (unchanged from before):
-//   - -keydir's default is a plain relative folder. The real value should
-//     be Wails' app_data_dir() equivalent, which migration blueprint §7
-//     item 14 explicitly still lists as open ("not wired up until Phase
-//     3+"). Still open — not resolved by this pass.
-//   - -db/-schema/-logdir defaults are similarly plain relative paths,
-//     fine for `go run`/local dev, almost certainly wrong for a real
-//     packaged Wails app — same open question.
-//   - wait_time=5s / timeout=60s are NOT placeholders — Python's real,
-//     documented defaults, confirmed in scraper.go's own doc comment.
+// Path defaults (-db/-logdir/-keydir) resolve under defaultDataDir()
+// (%LOCALAPPDATA%\VestigeGo on Windows) so a Program Files install stays
+// writable for standard users. Override any of them on the CLI for
+// local/dev layouts. -schema stays a cwd-relative read path; packaged
+// builds fall back to the embedded schema.sql when the file is absent.
 package main
 
 import (
@@ -64,6 +59,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -84,10 +80,15 @@ import (
 var trayIcon []byte
 
 func main() {
-	dbPath := flag.String("db", "vestige.db", "path to the SQLite database file")
-	schemaPath := flag.String("schema", "schema.sql", "path to schema.sql (applied once, only if -db doesn't exist yet)")
-	logDir := flag.String("logdir", "logs", "directory for date-nested run-log JSON files")
-	keyDir := flag.String("keydir", "./.vestige-go-keys", "fallback dir for the settings-encryption key if the OS keychain is unavailable — PLACEHOLDER, see package doc comment")
+	dataDir, err := defaultDataDir()
+	if err != nil {
+		log.Fatalf("resolve data dir: %v", err)
+	}
+
+	dbPath := flag.String("db", filepath.Join(dataDir, "vestige.db"), "path to the SQLite database file")
+	schemaPath := flag.String("schema", "schema.sql", "path to schema.sql (applied once, only if -db doesn't exist yet); falls back to embedded schema if missing")
+	logDir := flag.String("logdir", filepath.Join(dataDir, "logs"), "directory for date-nested run-log JSON files")
+	keyDir := flag.String("keydir", filepath.Join(dataDir, "keys"), "fallback dir for the settings-encryption key if the OS keychain is unavailable")
 	headless := flag.Bool("headless", true, "run the browser headless (Python's own default: True)")
 	port := flag.String("port", "0", "HTTP port for the Gin API to bind (0 = OS-assigned ephemeral port, the default for the desktop build)")
 	flag.Parse()

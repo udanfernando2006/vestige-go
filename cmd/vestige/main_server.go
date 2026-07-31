@@ -29,6 +29,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -39,10 +40,15 @@ import (
 )
 
 func main() {
-	dbPath := flag.String("db", "vestige.db", "path to the SQLite database file")
-	schemaPath := flag.String("schema", "schema.sql", "path to schema.sql (applied once, only if -db doesn't exist yet)")
-	logDir := flag.String("logdir", "logs", "directory for date-nested run-log JSON files")
-	keyDir := flag.String("keydir", "./.vestige-go-keys", "fallback dir for the settings-encryption key if the OS keychain is unavailable")
+	dataDir, err := defaultDataDir()
+	if err != nil {
+		log.Fatalf("resolve data dir: %v", err)
+	}
+
+	dbPath := flag.String("db", filepath.Join(dataDir, "vestige.db"), "path to the SQLite database file")
+	schemaPath := flag.String("schema", "schema.sql", "path to schema.sql (applied once, only if -db doesn't exist yet); falls back to embedded schema if missing")
+	logDir := flag.String("logdir", filepath.Join(dataDir, "logs"), "directory for date-nested run-log JSON files")
+	keyDir := flag.String("keydir", filepath.Join(dataDir, "keys"), "fallback dir for the settings-encryption key if the OS keychain is unavailable")
 	headless := flag.Bool("headless", true, "run the browser headless (Python's own default: True)")
 	port := flag.String("port", "8080", "HTTP port to listen on — fixed by default in server mode, unlike the desktop build's ephemeral port")
 	flag.Parse()

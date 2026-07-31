@@ -29,10 +29,12 @@ Unicode true
 ## !define UNINST_KEY_NAME     "UninstKeyInRegistry"  # Default "${INFO_COMPANYNAME}${INFO_PRODUCTNAME}"
 ####
 ## !define REQUEST_EXECUTION_LEVEL "admin"            # Default "admin"  see also https://nsis.sourceforge.io/Docs/Chapter4.html
-## !define WAILS_INSTALL_SCOPE     "user"             # Default "machine" - set to "user" for per-user install ($LOCALAPPDATA) without UAC prompt
 ####
 ## !include the wails tools
 ####
+# Per-user install under $LOCALAPPDATA\Programs\… — no UAC. wails_tools.nsh
+# also flips REQUEST_EXECUTION_LEVEL to "user" when this is set.
+!define WAILS_INSTALL_SCOPE "user"
 !define INFO_PROJECTNAME "vestige-go" # Overriding the stale "scratchtest" value
                                         # wails_tools.nsh was otherwise inferring
                                         # (leftover from this repo's original
@@ -124,18 +126,17 @@ Section "uninstall"
 
     RMDir /r "$AppData\${PRODUCT_EXECUTABLE}" # Remove WebView2 cache
 
-    # Ask the user if they want to delete their database & settings
+    # Ask the user if they want to delete their database & settings.
+    # Runtime data lives under %LOCALAPPDATA%\VestigeGo (os.UserCacheDir),
+    # not next to the exe — see cmd/vestige/paths.go.
     MessageBox MB_YESNO|MB_ICONQUESTION "Do you want to delete your user database (vestige.db) and settings?" IDYES delete_data IDNO keep_data
 
 delete_data:
-    Delete "$INSTDIR\vestige.db"
-    Delete "$INSTDIR\.vestige-go-keys"
-    RMDir /r "$INSTDIR\logs"
-    RMDir /r "$INSTDIR\logs-live"
+    RMDir /r "$LOCALAPPDATA\VestigeGo"
     Goto done_data
 
 keep_data:
-    # User chose No — leave vestige.db and settings intact
+    # User chose No — leave %LOCALAPPDATA%\VestigeGo intact
 
 done_data:
 
@@ -143,7 +144,7 @@ done_data:
     Delete "$INSTDIR\${PRODUCT_EXECUTABLE}"
     RMDir /r "$INSTDIR\chromium"
 
-    # RMDir (without /r) only removes $INSTDIR if empty (leaves vestige.db if kept)
+    # RMDir (without /r) only removes $INSTDIR if empty
     RMDir $INSTDIR
 
     Delete "$SMPROGRAMS\${INFO_PRODUCTNAME}.lnk"
