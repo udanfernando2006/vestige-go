@@ -24,8 +24,7 @@ tasks:
     generates:
       - node_modules
     preconditions:
-      # `which` avoids needing Git Bash / sh.exe (plain Windows pwsh has npm.cmd on PATH).
-      - which: npm
+      - sh: where npm
         msg: "Looks like npm isn't installed. Npm is part of the Node installer: https://nodejs.org/en/download/"
     cmds:
       - npm install
