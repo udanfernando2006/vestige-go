@@ -126,10 +126,10 @@ Section "uninstall"
 
     RMDir /r "$AppData\${PRODUCT_EXECUTABLE}" # Remove WebView2 cache
 
-    # Ask the user if they want to delete their database & settings.
+    # Ask the user if they want to delete all Vestige data
     # Runtime data lives under %LOCALAPPDATA%\VestigeGo (os.UserCacheDir),
     # not next to the exe — see cmd/vestige/paths.go.
-    MessageBox MB_YESNO|MB_ICONQUESTION "Do you want to delete your user database (vestige.db) and settings?" IDYES delete_data IDNO keep_data
+    MessageBox MB_YESNO|MB_ICONQUESTION "Delete all Vestige data, including the database, settings, logs, and encryption keys?" IDYES delete_data IDNO keep_data
 
 delete_data:
     RMDir /r "$LOCALAPPDATA\VestigeGo"
