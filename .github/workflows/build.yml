@@ -54,7 +54,7 @@ jobs:
       - name: Cache wails3 binary
         uses: actions/cache@v4
         with:
-          path: ~\AppData\Local\bin\wails3.exe
+          path: ~\.local\bin\wails3.exe
           key: wails3-cli-${{ runner.os }}-${{ hashFiles('go.sum') }}
 
       - name: Resolve pinned wails3 CLI onto PATH
@@ -63,7 +63,9 @@ jobs:
           $binPath = go tool -n wails3
           $destDir = "$env:USERPROFILE\.local\bin"
           New-Item -ItemType Directory -Force -Path $destDir | Out-Null
-          Copy-Item $binPath "$destDir\wails3.exe" -Force
+          if (!(Test-Path "$destDir\wails3.exe")) {
+            Copy-Item $binPath "$destDir\wails3.exe" -Force
+          }
           Add-Content -Path $env:GITHUB_PATH -Value $destDir
 
       # Cheap sanity check — surfaces a missing dependency with a clear message
