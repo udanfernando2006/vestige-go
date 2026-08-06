@@ -48,7 +48,31 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     if (res.status === 204) return undefined as T;
 
     const text = await res.text();
-    const data = text ? JSON.parse(text) : undefined;
+    // CodeRabbit-flagged: JSON.parse(text) was unguarded here — every
+    // exported function in this file routes through request(), so a
+    // non-JSON response body (an HTML error page from a captive portal,
+    // a proxy, an antivirus/firewall interception page, or a genuinely
+    // misconfigured/crashing backend) threw a raw, uncaught SyntaxError
+    // instead of the ApiError shape every caller across the app is
+    // written to expect (see e.g. TrackingForm.tsx's
+    // `err instanceof Error ? err.message : ...` handling). Guarded so a
+    // parse failure always surfaces as a proper ApiError with the raw
+    // response text preserved for debugging, on both the success-status
+    // and error-status paths.
+    let data: unknown;
+    if (text) {
+        try {
+            data = JSON.parse(text);
+        } catch {
+            throw new ApiError(
+                res.ok
+                    ? "Server returned an unexpected (non-JSON) response"
+                    : `Request failed with status ${res.status} (non-JSON response)`,
+                res.status,
+                text,
+            );
+        }
+    }
 
     if (!res.ok) {
         // GlobalExceptionHandler returns { error: "..." } for 404/409/500;

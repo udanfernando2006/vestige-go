@@ -140,11 +140,52 @@ func main() {
 	}
 	apiPort := listener.Addr().(*net.TCPAddr).Port
 
-	httpServer := &http.Server{Handler: router}
+	// Server timeouts (CodeRabbit-flagged: none were set before). Go's
+	// http.Server has NO timeouts at all by default — an unset
+	// ReadHeaderTimeout in particular leaves a Slowloris-class opening (a
+	// connection that trickles headers in slowly ties up a goroutine
+	// indefinitely). Low real-world severity for a 127.0.0.1-only desktop
+	// API, but free to set correctly and standard Go practice regardless.
+	//
+	// WriteTimeout deliberately NOT set here (an earlier draft of this fix
+	// set it to 180s, which was itself wrong — see scheduler.go's
+	// executeRun): POST /api/runs/trigger calls executeRun synchronously,
+	// which runs orch.RunAll across EVERY active tracking pair before the
+	// handler ever writes its response — unbounded by any single LLM-call
+	// timeout, and easily capable of exceeding any fixed WriteTimeout for
+	// a large enough library. Go's http.Server applies WriteTimeout
+	// server-wide with no per-route override, so a value generous enough
+	// for triggerRun would be needless slack on every other route, while a
+	// value sized for typical routes would silently truncate a slow-but-
+	// successful trigger response — the run itself would still complete
+	// and log correctly server-side, but the client would see a broken/
+	// reset connection with no way to know the run actually succeeded.
+	// ReadTimeout/ReadHeaderTimeout/IdleTimeout don't have this problem
+	// (they bound the request side and idle-connection side, not a slow
+	// handler), so they stay.
+	httpServer := &http.Server{
+		Handler:           router,
+		ReadTimeout:       30 * time.Second,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+	// CodeRabbit-flagged: this used to be log.Fatalf(...), which calls
+	// os.Exit(1) directly — no deferred functions run, OnShutdown never
+	// fires, the store/log file never close, and (since this goroutine's
+	// os.Exit kills the WHOLE process) Wails' window/tray/scheduler all
+	// vanish ungracefully out from under app.Run() too. A server that dies
+	// AFTER successfully starting (port stolen out from under it, a
+	// recovered panic surfacing as an error, etc.) deserves the same
+	// graceful-shutdown path as every other quit trigger, not a silent
+	// hard kill. serverErr is watched by a goroutine below, started at the
+	// same point (after mainWindow exists) as the existing OS-signal
+	// watcher, for the identical "app.Quit() before Run/after Run returned
+	// early can nil-pointer-crash" reason documented on that goroutine.
+	serverErr := make(chan error, 1)
 	go func() {
 		log.Printf("Vestige-Go API listening on 127.0.0.1:%d (db=%s, headless=%v)", apiPort, *dbPath, *headless)
 		if err := httpServer.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Fatalf("server error: %v", err)
+			serverErr <- err
 		}
 	}()
 
@@ -187,6 +228,16 @@ func main() {
 			if err := httpServer.Shutdown(shutdownCtx); err != nil {
 				log.Printf("graceful shutdown error: %v", err)
 			}
+			// CodeRabbit-flagged: pairStore was never closed anywhere —
+			// neither here nor via a top-level defer (a defer wouldn't have
+			// even helped, since Wails' app.Run() owns the process's real
+			// exit path; OnShutdown is the actual place a store.Close() has
+			// to live). Closing releases the SQLite file lock and lets any
+			// buffered/WAL state checkpoint cleanly instead of trusting
+			// process-exit fd reclamation alone.
+			if err := pairStore.Close(); err != nil {
+				log.Printf("store close error: %v", err)
+			}
 			log.Println("shutdown complete")
 		},
 		SingleInstance: &application.SingleInstanceOptions{
@@ -219,6 +270,19 @@ func main() {
 	go func() {
 		<-sigCtx.Done()
 		app.Quit()
+	}()
+
+	// Watches serverErr (populated above if httpServer.Serve fails after
+	// successfully starting) and routes it through the same app.Quit() ->
+	// OnShutdown path as every other quit trigger, rather than the
+	// log.Fatalf hard-kill this replaced. Started here (after mainWindow
+	// exists), matching the signal-watcher goroutine immediately above and
+	// for the identical reason.
+	go func() {
+		if err := <-serverErr; err != nil {
+			log.Printf("server error, shutting down: %v", err)
+			app.Quit()
+		}
 	}()
 
 	if err := app.Run(); err != nil {

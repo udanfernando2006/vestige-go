@@ -29,6 +29,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 const (
@@ -37,10 +38,9 @@ const (
 )
 
 var (
-	mu           sync.Mutex // guards os.Stderr swaps below — StartRun/Close must never race each other
-	sessionFile  *os.File
-	sessionPipeW *os.File // the write-end os.Stderr currently points at between runs
-	liveDir      string
+	mu          sync.Mutex // guards Setup/StartRun/Close against each other (unchanged)
+	sessionFile *os.File
+	liveDir     string
 )
 
 // Setup opens the general session log and wires log.SetOutput + the
@@ -126,44 +126,87 @@ func (rl *RunLogger) Close() {
 	rl.file.Close()
 }
 
-// pointStderrAt tears down any existing os.Stderr pipe/pump goroutine and
-// re-points os.Stderr at a fresh pipe that tees into all of dests. Always
-// includes the ORIGINAL real stderr (captured once, at package init) as
-// an implicit extra destination, so terminal visibility in dev mode is
-// never lost regardless of how many times this is called.
+// pointStderrAt re-targets WHERE stderr output is teed to, without ever
+// reassigning the global os.Stderr variable itself after the first call.
+//
+// CodeRabbit-flagged data race, fixed here: the previous version called
+// `os.Stderr = w` on every StartRun/Close, creating a brand-new pipe each
+// time. os.Stderr is a package-level var in the "os" package — every
+// pipeline goroutine that does fmt.Fprintf(os.Stderr, ...) (per this
+// package's own doc comment, that's exactly what [Orchestrator]/
+// [Scraper]/[Session] logging does) reads that global WITHOUT taking
+// applog's mu, because it can't — mu is unexported and those call sites
+// have no reason to know applog exists. So a concurrent StartRun/Close
+// swapping os.Stderr out from under an in-flight Fprintf was a genuine
+// data race (flagged by `go test -race`), and in the worst case could
+// write to a pipe whose write-end had already been closed by the very
+// swap that raced it ("io: write on closed pipe").
+//
+// Fixed by inverting which side changes: os.Stderr is now pointed at ONE
+// long-lived pipe write-end, set exactly once (see ensureStderrPipe
+// below) and never reassigned again for the life of the process — so
+// every concurrent Fprintf(os.Stderr, ...) always sees a stable, valid,
+// open file, full stop. What changes on StartRun/Close instead is the
+// pipe READ side's fan-out target, via currentDest — an atomic.Pointer
+// swap that only this package's own single pump goroutine ever reads
+// from, so no other goroutine's os.Stderr access is affected by it at
+// all.
 func pointStderrAt(dests ...io.Writer) error {
-	if currentStderrCancel != nil {
-		currentStderrCancel()
-		currentStderrCancel = nil
+	if err := ensureStderrPipe(); err != nil {
+		return err
 	}
-
-	r, w, err := os.Pipe()
-	if err != nil {
-		return fmt.Errorf("applog: create stderr pipe: %w", err)
-	}
-
 	allDests := append([]io.Writer{realStderr}, dests...)
 	tee := io.MultiWriter(allDests...)
-
-	done := make(chan struct{})
-	go func() {
-		io.Copy(tee, r)
-		close(done)
-	}()
-
-	os.Stderr = w
-	currentStderrCancel = func() {
-		w.Close() // closing the write end unblocks io.Copy's read loop
-		<-done    // wait for the pump goroutine to drain and exit before returning
-		r.Close()
-	}
+	currentDest.Store(&tee)
 	return nil
 }
 
 var (
-	realStderr          = os.Stderr // captured once, before anything ever reassigns os.Stderr
-	currentStderrCancel func()
+	realStderr = os.Stderr // captured once, before anything ever reassigns os.Stderr
+
+	stderrPipeOnce sync.Once
+	stderrPipeErr  error
+	currentDest    atomic.Pointer[io.Writer] // read only by the pump goroutine below
+
+	// idleDest is what currentDest holds before Setup's first
+	// pointStderrAt call, and again after a RunLogger.Close() with no
+	// active run — output still reaches the real terminal via realStderr
+	// (always included in allDests above) even in that window.
+	idleDest io.Writer = io.Discard
 )
+
+// ensureStderrPipe creates the single, process-lifetime pipe and points
+// the real os.Stderr at its write end exactly once. Safe to call
+// repeatedly (sync.Once) — every pointStderrAt call goes through this,
+// but only the first actually does anything.
+func ensureStderrPipe() error {
+	stderrPipeOnce.Do(func() {
+		r, w, err := os.Pipe()
+		if err != nil {
+			stderrPipeErr = fmt.Errorf("applog: create stderr pipe: %w", err)
+			return
+		}
+		var initial io.Writer = idleDest
+		currentDest.Store(&initial)
+		go func() {
+			buf := make([]byte, 4096)
+			for {
+				n, err := r.Read(buf)
+				if n > 0 {
+					dest := currentDest.Load()
+					if dest != nil {
+						_, _ = (*dest).Write(buf[:n])
+					}
+				}
+				if err != nil {
+					return
+				}
+			}
+		}()
+		os.Stderr = w
+	})
+	return stderrPipeErr
+}
 
 func rotateIfOversized(logPath string) error {
 	info, err := os.Stat(logPath)

@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"sync/atomic"
 	"time"
 
 	"github.com/udanfernando2006/vestige-go/internal/applog"
@@ -125,6 +126,36 @@ func (srv *Server) StartScheduler(ctx context.Context) {
 	}
 }
 
+// lastFailedRunAt tracks when schedulerTick last saw executeRun fail for a
+// reason OTHER than ErrRunInProgress (a real pipeline failure — e.g. the
+// DIRECT_*/SELECTOR_* misconfiguration gap the project's own archive
+// catalog documents as a real, observed condition, not hypothetical).
+//
+// CodeRabbit-flagged: previously, a failed run left srv.lastRunAt
+// unchanged (only executeRun's SUCCESS path stores it), so the very next
+// 60s tick's `due` check would still see the old/nil lastRunAt, evaluate
+// true again, and retry — every single tick, indefinitely, for a failure
+// that may be entirely permanent (a bad API key never fixes itself by
+// waiting 60 more seconds). Not known to be a Go-only regression — the
+// package doc comment says this mirrors _scheduler_tick() branch-for-
+// branch, and nothing in this project's guide docs mentions backoff logic
+// on the Python side either, so this may be a pre-existing gap in
+// api_server.py too, not something the port introduced. Flagged rather
+// than silently assumed Go-only. Fixed here with a minimal, additive
+// backoff that does NOT touch the "skip a tick, never queue one" run-lock
+// semantics the migration blueprint calls out as load-bearing to
+// preserve — it only changes how soon a FAILED run is retried, not
+// whether concurrent runs can overlap.
+var lastFailedRunAt atomic.Pointer[time.Time]
+
+// failureBackoff bounds how often a failing scheduled run is retried —
+// deliberately much shorter than a typical ScrapeIntervalHours setting
+// (hours-scale) so a real fix (e.g. correcting a setting) is picked up
+// reasonably soon, but long enough that a persistently broken
+// configuration doesn't hammer the pipeline (and, for LLM-backed
+// failures, an external API) every single 60s tick.
+const failureBackoff = 15 * time.Minute
+
 // schedulerTick mirrors _scheduler_tick() branch-for-branch: skip (fast
 // path) if a run is already in flight, skip if scheduling is disabled,
 // skip if not yet due, otherwise execute. defer/recover mirrors
@@ -143,6 +174,16 @@ func (srv *Server) schedulerTick(ctx context.Context) {
 		// CompareAndSwap is still the real source of truth below; this is
 		// purely an optimization to skip a DB read when a run's obviously
 		// already in flight.
+		return
+	}
+
+	if lastFail := lastFailedRunAt.Load(); lastFail != nil && time.Since(*lastFail) < failureBackoff {
+		// A recent run failed (for a reason other than a lock conflict) —
+		// hold off retrying until failureBackoff has elapsed, rather than
+		// hammering the same broken path every single 60s tick. This does
+		// NOT change whether a run can be triggered manually in the
+		// meantime (triggerRun doesn't consult this at all) — only the
+		// scheduler's own automatic retry cadence.
 		return
 	}
 
@@ -174,8 +215,14 @@ func (srv *Server) schedulerTick(ctx context.Context) {
 			// A manual trigger snuck in between the fast-path check above
 			// and this call — silent skip, matches Python's own silent
 			// `if _run_lock.locked(): return`, not an error worth logging.
+			// Deliberately does NOT set lastFailedRunAt — a lock conflict
+			// isn't a pipeline failure, it's a timing artifact, and
+			// backing off from it would just delay a run that was already
+			// happening anyway (via whatever triggered the conflict).
 			return
 		}
 		log.Printf("[scheduler] scheduled scrape run failed: %v", err)
+		now := time.Now().UTC()
+		lastFailedRunAt.Store(&now)
 	}
 }

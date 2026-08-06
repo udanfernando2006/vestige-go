@@ -295,29 +295,45 @@ func (s *SQLiteStore) CreateBook(ctx context.Context, b domain.Book) (*domain.Bo
 // UpdateBook mirrors BookService.update(): author/description only, ""=clear
 // (stored as NULL), nil=no change (field untouched). Matches BookUpdateDto's
 // documented convention exactly.
+//
+// Wrapped in a transaction (CodeRabbit-flagged): the two field updates plus
+// the reload used to be three independent round-trips with no atomicity —
+// a failure between the author and description writes left a half-applied
+// row committed with no rollback, and a concurrent request could interleave
+// with either write. Now matches UpdateTrackingPairFields' existing
+// tx-per-call pattern in this same file.
 func (s *SQLiteStore) UpdateBook(ctx context.Context, id int64, author, description *string) (*domain.Book, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("store: update book %d: begin tx: %w", id, err)
+	}
+	defer tx.Rollback()
+
 	if author != nil {
 		v := nilIfEmpty(*author)
-		if _, err := s.db.ExecContext(ctx, `UPDATE books SET author = ? WHERE id = ?`, v, id); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE books SET author = ? WHERE id = ?`, v, id); err != nil {
 			return nil, fmt.Errorf("store: update book %d author: %w", id, err)
 		}
 	}
 	if description != nil {
 		v := nilIfEmpty(*description)
-		if _, err := s.db.ExecContext(ctx, `UPDATE books SET description = ? WHERE id = ?`, v, id); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE books SET description = ? WHERE id = ?`, v, id); err != nil {
 			return nil, fmt.Errorf("store: update book %d description: %w", id, err)
 		}
 	}
-	row := s.db.QueryRowContext(ctx, `
+	row := tx.QueryRowContext(ctx, `
 		SELECT id, name, isbn, is_series_entry, author, description, series_id FROM books WHERE id = ?
 	`, id)
 	var b domain.Book
-	err := row.Scan(&b.ID, &b.Name, &b.ISBN, &b.IsSeriesEntry, &b.Author, &b.Description, &b.SeriesID)
+	err = row.Scan(&b.ID, &b.Name, &b.ISBN, &b.IsSeriesEntry, &b.Author, &b.Description, &b.SeriesID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("store: update book %d: %w", id, ErrNotFound)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("store: update book %d: reload: %w", id, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("store: update book %d: commit: %w", id, err)
 	}
 	return &b, nil
 }
@@ -507,9 +523,18 @@ func (s *SQLiteStore) CreateSeries(ctx context.Context, sr domain.Series) (*doma
 // Java rejecting it in the service layer before ever reaching the
 // repository save, not something this store method re-validates).
 // author/description follow the standard nil=no-change/""=clear convention.
+//
+// Wrapped in a transaction — see UpdateBook's comment above for why
+// (CodeRabbit-flagged non-atomicity, identical shape here).
 func (s *SQLiteStore) UpdateSeries(ctx context.Context, id int64, name, author, description *string) (*domain.Series, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("store: update series %d: begin tx: %w", id, err)
+	}
+	defer tx.Rollback()
+
 	if name != nil {
-		if _, err := s.db.ExecContext(ctx, `UPDATE series SET name = ? WHERE id = ?`, *name, id); isUniqueConstraintErr(err) {
+		if _, err := tx.ExecContext(ctx, `UPDATE series SET name = ? WHERE id = ?`, *name, id); isUniqueConstraintErr(err) {
 			return nil, fmt.Errorf("store: update series %d: name %q: %w", id, *name, ErrConflict)
 		} else if err != nil {
 			return nil, fmt.Errorf("store: update series %d: name: %w", id, err)
@@ -517,24 +542,27 @@ func (s *SQLiteStore) UpdateSeries(ctx context.Context, id int64, name, author, 
 	}
 	if author != nil {
 		v := nilIfEmpty(*author)
-		if _, err := s.db.ExecContext(ctx, `UPDATE series SET author = ? WHERE id = ?`, v, id); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE series SET author = ? WHERE id = ?`, v, id); err != nil {
 			return nil, fmt.Errorf("store: update series %d: author: %w", id, err)
 		}
 	}
 	if description != nil {
 		v := nilIfEmpty(*description)
-		if _, err := s.db.ExecContext(ctx, `UPDATE series SET description = ? WHERE id = ?`, v, id); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE series SET description = ? WHERE id = ?`, v, id); err != nil {
 			return nil, fmt.Errorf("store: update series %d: description: %w", id, err)
 		}
 	}
-	row := s.db.QueryRowContext(ctx, `SELECT id, name, author, description FROM series WHERE id = ?`, id)
+	row := tx.QueryRowContext(ctx, `SELECT id, name, author, description FROM series WHERE id = ?`, id)
 	var sr domain.Series
-	err := row.Scan(&sr.ID, &sr.Name, &sr.Author, &sr.Description)
+	err = row.Scan(&sr.ID, &sr.Name, &sr.Author, &sr.Description)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("store: update series %d: %w", id, ErrNotFound)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("store: update series %d: reload: %w", id, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("store: update series %d: commit: %w", id, err)
 	}
 	return &sr, nil
 }
@@ -581,7 +609,6 @@ func (s *SQLiteStore) GetStoreByName(ctx context.Context, name string) (*domain.
 	}
 	return &st, nil
 }
-
 
 func (s *SQLiteStore) GetAllStores(ctx context.Context) ([]domain.Store, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT id, name, base_url, search_url_template FROM stores`)
@@ -632,33 +659,45 @@ func (s *SQLiteStore) CreateStore(ctx context.Context, st domain.Store) (*domain
 // ""=clear (-> NULL, back to "undiscovered") / nil=no-change convention;
 // name/baseUrl are plain nil=no-change (Java applies them unconditionally
 // once non-null, with no blank/empty special-casing for these two fields).
+//
+// Wrapped in a transaction — see UpdateBook's comment above for why
+// (CodeRabbit-flagged non-atomicity, identical shape here).
 func (s *SQLiteStore) UpdateStore(ctx context.Context, id int64, name, baseURL, searchURLTemplate *string) (*domain.Store, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("store: update store %d: begin tx: %w", id, err)
+	}
+	defer tx.Rollback()
+
 	if name != nil {
-		if _, err := s.db.ExecContext(ctx, `UPDATE stores SET name = ? WHERE id = ?`, *name, id); isUniqueConstraintErr(err) {
+		if _, err := tx.ExecContext(ctx, `UPDATE stores SET name = ? WHERE id = ?`, *name, id); isUniqueConstraintErr(err) {
 			return nil, fmt.Errorf("store: update store %d: name %q: %w", id, *name, ErrConflict)
 		} else if err != nil {
 			return nil, fmt.Errorf("store: update store %d: name: %w", id, err)
 		}
 	}
 	if baseURL != nil {
-		if _, err := s.db.ExecContext(ctx, `UPDATE stores SET base_url = ? WHERE id = ?`, *baseURL, id); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE stores SET base_url = ? WHERE id = ?`, *baseURL, id); err != nil {
 			return nil, fmt.Errorf("store: update store %d: base_url: %w", id, err)
 		}
 	}
 	if searchURLTemplate != nil {
 		v := nilIfBlank(*searchURLTemplate)
-		if _, err := s.db.ExecContext(ctx, `UPDATE stores SET search_url_template = ? WHERE id = ?`, v, id); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE stores SET search_url_template = ? WHERE id = ?`, v, id); err != nil {
 			return nil, fmt.Errorf("store: update store %d: search_url_template: %w", id, err)
 		}
 	}
-	row := s.db.QueryRowContext(ctx, `SELECT id, name, base_url, search_url_template FROM stores WHERE id = ?`, id)
+	row := tx.QueryRowContext(ctx, `SELECT id, name, base_url, search_url_template FROM stores WHERE id = ?`, id)
 	var st domain.Store
-	err := row.Scan(&st.ID, &st.Name, &st.BaseURL, &st.SearchURLTemplate)
+	err = row.Scan(&st.ID, &st.Name, &st.BaseURL, &st.SearchURLTemplate)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("store: update store %d: %w", id, ErrNotFound)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("store: update store %d: reload: %w", id, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("store: update store %d: commit: %w", id, err)
 	}
 	return &st, nil
 }
@@ -878,6 +917,16 @@ func (s *SQLiteStore) UpdateTrackingPairFields(ctx context.Context, id int64, pr
 
 // GetCurrentAvailability mirrors AvailabilitySnapshotRepository.findLatestPerPair()
 // + AvailabilityService.getCurrentStatus()'s mapping.
+//
+// Tie-break added (CodeRabbit-flagged): the original WHERE a.scraped_at =
+// MAX(...) can match more than one row per pair when two snapshots share
+// the exact same scraped_at (plausible at second-resolution timestamps
+// under a fast run, or two runs landing in the same second) — the join
+// would then return duplicate "current status" rows for a single pair.
+// The row's own autoincrement id is a reliable secondary key (higher id =
+// inserted later = the actual most-recent write even when timestamps
+// collide), so this now also requires a.id to be the max id sharing that
+// max scraped_at, guaranteeing exactly one row per pair.
 func (s *SQLiteStore) GetCurrentAvailability(ctx context.Context) ([]CurrentAvailabilityRow, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT a.pair_id, b.name, st.name, a.status, a.price, p.product_url, a.scraped_at
@@ -885,8 +934,11 @@ func (s *SQLiteStore) GetCurrentAvailability(ctx context.Context) ([]CurrentAvai
 		JOIN tracking_pairs p ON p.id = a.pair_id
 		JOIN books b ON b.id = p.book_id
 		JOIN stores st ON st.id = p.store_id
-		WHERE a.scraped_at = (
-			SELECT MAX(a2.scraped_at) FROM availability_snapshots a2 WHERE a2.pair_id = p.id
+		WHERE a.id = (
+			SELECT a2.id FROM availability_snapshots a2
+			WHERE a2.pair_id = p.id
+			ORDER BY a2.scraped_at DESC, a2.id DESC
+			LIMIT 1
 		)
 	`)
 	if err != nil {
@@ -996,6 +1048,19 @@ func (s *SQLiteStore) DeleteHistoryForPair(ctx context.Context, pairID int64) er
 // SETTINGS WRITES
 // =============================================================================
 
+// dbExecer is the minimal surface ApplySettingUpdate/applySettingUpdateTx
+// need — satisfied by both *sql.DB and *sql.Tx, so the same write logic
+// works standalone (single ApplySettingUpdate call, existing behavior,
+// unchanged) or inside a caller-managed transaction (ApplySettingsBatch
+// below, new — closes the non-atomic-multi-key-update gap CodeRabbit
+// flagged on internal/handler/settings.go's updateSettings, which called
+// ApplySettingUpdate once per key with no shared transaction, so a
+// failure partway through left however many keys had already been
+// written committed, with no rollback).
+type dbExecer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
 // ApplySettingUpdate mirrors writer.py's apply_setting_update(key, value)
 // per vestige_guide.md §7's Module Map description (writer.py itself was
 // not uploaded — this is built from that description plus
@@ -1005,11 +1070,58 @@ func (s *SQLiteStore) DeleteHistoryForPair(ctx context.Context, pairID int64) er
 // configured"). value == anything else: INSERT OR REPLACE, encrypting via
 // s.cipher first if key is one of the two secret keys.
 func (s *SQLiteStore) ApplySettingUpdate(ctx context.Context, key string, value *string) error {
+	return applySettingUpdate(ctx, s.db, s.cipher, key, value)
+}
+
+// SettingUpdateInput is one key/value pair for ApplySettingsBatch — same
+// nil/""/value semantics as ApplySettingUpdate's own value parameter.
+type SettingUpdateInput struct {
+	Key   string
+	Value *string
+}
+
+// ApplySettingsBatch applies every update in one transaction — ALL keys
+// commit together, or NONE do, closing the CodeRabbit-flagged gap where
+// internal/handler/settings.go's updateSettings called ApplySettingUpdate
+// once per key against the shared *sql.DB directly: a failure partway
+// through (a DB error, a disk issue, an encryption failure on either
+// API-key field) left whatever subset of keys had already been written
+// committed, with no way to roll them back — and, until a separate fix,
+// which subset even varied run-to-run since it was driven by Go's
+// deliberately-randomized map iteration order. Callers should pass a
+// fixed-order slice (settings.go now does, per that earlier fix) so a
+// failure's error message clearly identifies which key in a known
+// sequence failed, even though the whole batch rolls back regardless of
+// where in the sequence it failed.
+func (s *SQLiteStore) ApplySettingsBatch(ctx context.Context, updates []SettingUpdateInput) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("store: apply settings batch: begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	for _, u := range updates {
+		if err := applySettingUpdate(ctx, tx, s.cipher, u.Key, u.Value); err != nil {
+			return err // already wrapped with the specific key by applySettingUpdate
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: apply settings batch: commit: %w", err)
+	}
+	return nil
+}
+
+// applySettingUpdate holds the actual write logic, shared by
+// ApplySettingUpdate (single-call, ex against s.db) and ApplySettingsBatch
+// (multi-call, ex against a shared tx) — identical behavior either way,
+// only which dbExecer gets the ExecContext calls differs.
+func applySettingUpdate(ctx context.Context, ex dbExecer, cipher Cipher, key string, value *string) error {
 	if value == nil {
 		return nil
 	}
 	if *value == "" {
-		if _, err := s.db.ExecContext(ctx, `DELETE FROM setting_overrides WHERE key = ?`, key); err != nil {
+		if _, err := ex.ExecContext(ctx, `DELETE FROM setting_overrides WHERE key = ?`, key); err != nil {
 			return fmt.Errorf("store: clear setting %s: %w", key, err)
 		}
 		return nil
@@ -1018,17 +1130,17 @@ func (s *SQLiteStore) ApplySettingUpdate(ctx context.Context, key string, value 
 	stored := *value
 	isEncrypted := secretSettingKeys[key]
 	if isEncrypted {
-		if s.cipher == nil {
+		if cipher == nil {
 			return fmt.Errorf("store: apply setting %s: %w", key, ErrCipherRequired)
 		}
-		enc, err := s.cipher.Encrypt(stored)
+		enc, err := cipher.Encrypt(stored)
 		if err != nil {
 			return fmt.Errorf("store: apply setting %s: encrypt: %w", key, err)
 		}
 		stored = enc
 	}
 
-	_, err := s.db.ExecContext(ctx, `
+	_, err := ex.ExecContext(ctx, `
 		INSERT INTO setting_overrides (key, value, is_encrypted) VALUES (?, ?, ?)
 		ON CONFLICT(key) DO UPDATE SET value = excluded.value, is_encrypted = excluded.is_encrypted
 	`, key, stored, isEncrypted)
@@ -1055,7 +1167,7 @@ func (s *SQLiteStore) GetSettingsStatus(ctx context.Context) (*domain.SettingsSt
 	out := &domain.SettingsStatus{
 		LLMDiscoveryEnabled:    full.LLMDiscoveryEnabled,
 		LLMMode:                full.LLMMode,
-		NotificationsEnabled: 	full.NotificationsEnabled,
+		NotificationsEnabled:   full.NotificationsEnabled,
 		SelectorAPIBase:        full.SelectorAPIBase,
 		SelectorModel:          full.SelectorModel,
 		DirectAPIBase:          full.DirectAPIBase,

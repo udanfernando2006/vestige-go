@@ -12,20 +12,20 @@
 package handler
 
 import (
-	"context"
 	"net/http"
 	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/udanfernando2006/vestige-go/internal/domain"
+	"github.com/udanfernando2006/vestige-go/internal/store"
 )
 
 func settingsStatusToResponse(s *domain.SettingsStatus) SettingsResponse {
 	return SettingsResponse{
 		LLMDiscoveryEnabled:      s.LLMDiscoveryEnabled,
 		LLMMode:                  s.LLMMode,
-		NotificationsEnabled: 	  s.NotificationsEnabled,
+		NotificationsEnabled:     s.NotificationsEnabled,
 		SelectorAPIBase:          s.SelectorAPIBase,
 		SelectorAPIKeyConfigured: s.SelectorAPIKeyConfig,
 		SelectorAPIKeyHint:       s.SelectorAPIKeyHint,
@@ -68,34 +68,43 @@ func (srv *Server) updateSettings(c *gin.Context) {
 	}
 
 	ctx := c.Request.Context()
-	updates := map[string]*string{
-		"LLM_DISCOVERY_ENABLED": boolToSettingValue(dto.LLMDiscoveryEnabled),
-		"LLM_MODE":               dto.LLMMode,
-		"NOTIFICATIONS_ENABLED":  boolToSettingValue(dto.NotificationsEnabled),
-		"SELECTOR_API_BASE":      dto.SelectorAPIBase,
-		"SELECTOR_API_KEY":       dto.SelectorAPIKey,
-		"SELECTOR_MODEL":         dto.SelectorModel,
-		"DIRECT_API_BASE":        dto.DirectAPIBase,
-		"DIRECT_API_KEY":         dto.DirectAPIKey,
-		"DIRECT_MODEL":           dto.DirectModel,
-		"SCRAPE_INTERVAL_HOURS":  intToSettingValue(dto.ScrapeIntervalHours),
+	// CodeRabbit-flagged, now fully closed rather than just made
+	// deterministic: this originally ranged a map[string]*string directly
+	// (Go's map iteration order is deliberately randomized by the runtime,
+	// so every call processed these 10 keys in a different order), and
+	// even after fixing that to a fixed-order slice, each key was still
+	// applied via a separate ApplySettingUpdate call against the store
+	// directly — no shared transaction, so a failure partway through left
+	// whatever subset had already been written committed with no
+	// rollback. Both problems are now closed together: every update below
+	// (the 10 flat keys AND the two pattern-list keys, folded into the
+	// same slice rather than applied via separate calls afterward) goes
+	// through ONE store.ApplySettingsBatch call, which runs the whole
+	// batch inside a single transaction — either every key commits, or
+	// (on any failure, at any point in the sequence) none of them do, and
+	// the caller gets a 500 that accurately reflects "nothing changed"
+	// rather than an unpredictable partial write.
+	updates := []store.SettingUpdateInput{
+		{Key: "LLM_DISCOVERY_ENABLED", Value: boolToSettingValue(dto.LLMDiscoveryEnabled)},
+		{Key: "LLM_MODE", Value: dto.LLMMode},
+		{Key: "NOTIFICATIONS_ENABLED", Value: boolToSettingValue(dto.NotificationsEnabled)},
+		{Key: "SELECTOR_API_BASE", Value: dto.SelectorAPIBase},
+		{Key: "SELECTOR_API_KEY", Value: dto.SelectorAPIKey},
+		{Key: "SELECTOR_MODEL", Value: dto.SelectorModel},
+		{Key: "DIRECT_API_BASE", Value: dto.DirectAPIBase},
+		{Key: "DIRECT_API_KEY", Value: dto.DirectAPIKey},
+		{Key: "DIRECT_MODEL", Value: dto.DirectModel},
+		{Key: "SCRAPE_INTERVAL_HOURS", Value: intToSettingValue(dto.ScrapeIntervalHours)},
+		// Custom stock patterns: nil slice (JSON field omitted) = no
+		// change (patternListValue returns nil, and ApplySettingsBatch's
+		// underlying applySettingUpdate already treats a nil Value as a
+		// skip — same semantics as every other field here); non-nil empty
+		// slice ("[]" sent explicitly) = clear; non-nil non-empty = set,
+		// comma-joined. See patternListValue below.
+		{Key: "CUSTOM_STOCK_IN_PATTERNS", Value: patternListValue(dto.CustomStockInPatterns)},
+		{Key: "CUSTOM_STOCK_OUT_PATTERNS", Value: patternListValue(dto.CustomStockOutPatterns)},
 	}
-	for key, value := range updates {
-		if err := srv.store.ApplySettingUpdate(ctx, key, value); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal server error: " + err.Error()})
-			return
-		}
-	}
-
-	// Custom stock patterns: nil slice (JSON field omitted) = no change;
-	// non-nil empty slice ("[]" sent explicitly) = clear; non-nil
-	// non-empty = set. See dto.go's SettingsUpdateRequest doc comment for
-	// why this distinction works without a pointer-to-slice wrapper.
-	if err := applyPatternListUpdate(ctx, srv, "CUSTOM_STOCK_IN_PATTERNS", dto.CustomStockInPatterns); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal server error: " + err.Error()})
-		return
-	}
-	if err := applyPatternListUpdate(ctx, srv, "CUSTOM_STOCK_OUT_PATTERNS", dto.CustomStockOutPatterns); err != nil {
+	if err := srv.store.ApplySettingsBatch(ctx, updates); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal server error: " + err.Error()})
 		return
 	}
@@ -123,19 +132,27 @@ func intToSettingValue(n *int) *string {
 	return &v
 }
 
-// applyPatternListUpdate: nil slice (JSON field omitted entirely) = no
-// change, skip the call. Non-nil empty slice ("[]" sent explicitly) =
-// clear (pointer to ""). Non-nil non-empty = set, comma-joined — matches
+// patternListValue converts a CustomStockIn/OutPatterns slice into the
+// *string value ApplySettingsBatch expects, matching
+// resources.go's ApplySettingUpdate value semantics and
 // domain.Settings' own documented storage convention (writer.py:
-// ",".join(in_stock)) and resources.go's ApplySettingUpdate value semantics.
-func applyPatternListUpdate(ctx context.Context, srv *Server, key string, patterns []string) error {
+// ",".join(in_stock)): nil slice (JSON field omitted entirely) = nil (no
+// change, entry skipped). Non-nil empty slice ("[]" sent explicitly) =
+// pointer to "" (explicit clear). Non-nil non-empty = comma-joined.
+//
+// Replaces the old applyPatternListUpdate, which took *Server and called
+// srv.store.ApplySettingUpdate directly as a separate, un-batched call —
+// now folded into updateSettings' single ApplySettingsBatch call instead
+// (see that function's own comment for why), so this is a pure value
+// converter with no store access of its own.
+func patternListValue(patterns []string) *string {
 	if patterns == nil {
 		return nil
 	}
 	if len(patterns) == 0 {
 		empty := ""
-		return srv.store.ApplySettingUpdate(ctx, key, &empty)
+		return &empty
 	}
 	joined := strings.Join(patterns, ",")
-	return srv.store.ApplySettingUpdate(ctx, key, &joined)
+	return &joined
 }

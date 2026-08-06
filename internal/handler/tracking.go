@@ -129,6 +129,17 @@ func (srv *Server) createTrackingPair(c *gin.Context) {
 	if handleStoreError(c, err, "") {
 		return
 	}
+	// CreateTrackingPair's own implementation returns via GetPair(ctx, id)
+	// after insert, and GetPair's documented contract is (nil, nil) when the
+	// row doesn't exist — mirroring Python's Optional[Dict] -> None. err==nil
+	// therefore does NOT guarantee pair!=nil (a TOCTOU on the freshly-inserted
+	// row, or a future refactor, could hit that path) — CodeRabbit flagged
+	// the unguarded pair.ID dereference below as a nil-pointer panic risk.
+	// Guarded explicitly rather than trusting the error alone.
+	if pair == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Tracking pair was created but could not be reloaded"})
+		return
+	}
 	row, err := trackingRowByID(ctx, srv.store, pair.ID)
 	if handleStoreError(c, err, "") {
 		return

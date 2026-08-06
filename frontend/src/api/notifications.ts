@@ -11,7 +11,7 @@ import {
     NotificationService,
     type NotificationOptions,
 } from "../../bindings/github.com/wailsapp/wails/v3/pkg/services/notifications";
-import { getRuns, getRunDetail } from "./client";
+import { getRuns, getRunDetail, ApiError } from "./client";
 import { getNotificationsEnabled } from "./settings";
 import type { RunChangeDto, RunSummaryDto } from "./types";
 
@@ -112,13 +112,31 @@ export async function pollOnce() {
 
     const newRuns = selectNewRuns(runs, lastNotifiedRunId);
 
+    let firstFailedRunId: string | null = null;
     if (notificationsEnabled) {
         for (const run of newRuns) {
             try {
                 const detail = await getRunDetail(run.runId);
                 notifyForChanges(detail.changes);
-            } catch {
-                // a malformed or since-rotated log file — skip it, don't block later runs
+            } catch (err) {
+                // CodeRabbit-flagged, refined further: the backend
+                // (runs.go's getRunDetail) already distinguishes "genuinely
+                // gone" from "transient" cleanly — runlog.ErrNotFound maps
+                // to HTTP 404 (the log file was rotated away or never
+                // existed; retrying can never succeed), and every other
+                // failure maps to 500 (a read error, a request that raced
+                // an in-progress log rotation, a momentary hiccup —
+                // genuinely worth retrying). A 404 is treated as
+                // "processed" here (nothing to notify, but not held back
+                // either — retrying forever on a file that will never
+                // exist just wastes a request every 90s for no benefit).
+                // Anything else holds the watermark back so it's retried
+                // next poll, instead of the previous behavior of silently
+                // and permanently dropping ANY failure the same way,
+                // including ones that would have succeeded on retry.
+                if (!(err instanceof ApiError && err.status === 404)) {
+                    firstFailedRunId ??= run.runId;
+                }
             }
         }
     }
@@ -127,7 +145,19 @@ export async function pollOnce() {
     // branch, or re-enabling later replays everything missed as one burst.
 
     if (newRuns.length > 0) {
-        lastNotifiedRunId = runs[0].runId;
+        if (firstFailedRunId !== null) {
+            // Advance to just short of the first NON-404 failure (404s are
+            // treated as processed above, so they don't hold this back).
+            // selectNewRuns' strict `>` filter means this correctly
+            // re-includes firstFailedRunId (and anything after it) on the
+            // next poll — at worst a run that succeeded earlier in this
+            // same batch gets notified a second time, a far safer failure
+            // mode than the previous silent, permanent loss.
+            const idx = newRuns.findIndex((r) => r.runId === firstFailedRunId);
+            lastNotifiedRunId = idx > 0 ? newRuns[idx - 1].runId : lastNotifiedRunId;
+        } else {
+            lastNotifiedRunId = runs[0].runId;
+        }
     }
 }
 

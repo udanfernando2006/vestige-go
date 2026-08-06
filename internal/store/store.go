@@ -188,6 +188,15 @@ type PairStore interface {
 	// explicit clear (delete override row), anything else = set (secrets
 	// auto-encrypted via the configured Cipher).
 	ApplySettingUpdate(ctx context.Context, key string, value *string) error
+	// ApplySettingsBatch applies every update in ONE transaction — added
+	// (CodeRabbit-flagged) to close a real non-atomicity gap:
+	// internal/handler/settings.go's updateSettings previously called
+	// ApplySettingUpdate once per key against this store directly, with no
+	// shared transaction, so a failure partway through left whichever
+	// subset of keys had already been written committed with no rollback.
+	// Same per-key value semantics as ApplySettingUpdate; see
+	// resources.go's ApplySettingsBatch doc comment for the full story.
+	ApplySettingsBatch(ctx context.Context, updates []SettingUpdateInput) error
 	GetSettingsStatus(ctx context.Context) (*domain.SettingsStatus, error)
 }
 
@@ -346,6 +355,18 @@ func (s *SQLiteStore) GetLastSnapshot(ctx context.Context, pairID int64) (*domai
 
 // WriteSnapshot mirrors writer.py's write_snapshot(): appends an immutable
 // snapshot row AND updates the pair's status pointer in one transaction.
+//
+// CodeRabbit-flagged: result.Status can legitimately be nil (domain.
+// AvailabilityResult's own doc comment says "default null, never PENDING"
+// — this isn't a defensive-nil-check edge case, it's an expected value on
+// some paths). The snapshot row faithfully records "" for that (an
+// accurate, immutable record of what this particular result carried), but
+// blindly pushing that same "" into tracking_pairs.status would silently
+// wipe out the pair's real current status (e.g. IN_STOCK -> "") with an
+// enum value the UI's status badge doesn't even recognize. Fixed: the
+// pair's status pointer is only updated when the result actually carries a
+// non-empty status; a nil/empty result leaves the pair's existing status
+// untouched, exactly like any other partial-update path in this file.
 func (s *SQLiteStore) WriteSnapshot(ctx context.Context, pairID int64, result *domain.AvailabilityResult) (*domain.AvailabilitySnapshot, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -375,8 +396,10 @@ func (s *SQLiteStore) WriteSnapshot(ctx context.Context, pairID int64, result *d
 		return nil, fmt.Errorf("store: write snapshot: last insert id: %w", err)
 	}
 
-	if _, err := tx.ExecContext(ctx, `UPDATE tracking_pairs SET status = ? WHERE id = ?`, status, pairID); err != nil {
-		return nil, fmt.Errorf("store: write snapshot: update pair status: %w", err)
+	if status != "" {
+		if _, err := tx.ExecContext(ctx, `UPDATE tracking_pairs SET status = ? WHERE id = ?`, status, pairID); err != nil {
+			return nil, fmt.Errorf("store: write snapshot: update pair status: %w", err)
+		}
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -492,15 +515,15 @@ func (s *SQLiteStore) GetSettings(ctx context.Context) (*domain.Settings, error)
 	}
 
 	out := &domain.Settings{
-		LLMDiscoveryEnabled: strings.EqualFold(strings.TrimSpace(raw["LLM_DISCOVERY_ENABLED"]), "true"),
-		LLMMode:             raw["LLM_MODE"],
+		LLMDiscoveryEnabled:  strings.EqualFold(strings.TrimSpace(raw["LLM_DISCOVERY_ENABLED"]), "true"),
+		LLMMode:              raw["LLM_MODE"],
 		NotificationsEnabled: strings.EqualFold(strings.TrimSpace(raw["NOTIFICATIONS_ENABLED"]), "true"),
-		SelectorAPIBase:     raw["SELECTOR_API_BASE"],
-		SelectorAPIKey:      raw["SELECTOR_API_KEY"],
-		SelectorModel:       raw["SELECTOR_MODEL"],
-		DirectAPIBase:       raw["DIRECT_API_BASE"],
-		DirectAPIKey:        raw["DIRECT_API_KEY"],
-		DirectModel:         raw["DIRECT_MODEL"],
+		SelectorAPIBase:      raw["SELECTOR_API_BASE"],
+		SelectorAPIKey:       raw["SELECTOR_API_KEY"],
+		SelectorModel:        raw["SELECTOR_MODEL"],
+		DirectAPIBase:        raw["DIRECT_API_BASE"],
+		DirectAPIKey:         raw["DIRECT_API_KEY"],
+		DirectModel:          raw["DIRECT_MODEL"],
 	}
 
 	if raw["SCRAPE_INTERVAL_HOURS"] != "" {

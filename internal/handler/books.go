@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -26,6 +27,17 @@ func domainBookToDto(b domain.Book, seriesName *string) BookDto {
 	}
 }
 
+// bookGroupKey is a struct key rather than a bare string so that a
+// user-created series literally named "__standalone__" (the old sentinel)
+// can never collide with the standalone-books bucket — CodeRabbit flagged
+// that such a series would previously get silently merged into the
+// standalone group and returned with seriesName: null, losing its real
+// association.
+type bookGroupKey struct {
+	standalone bool
+	seriesName string
+}
+
 // listBooksGrouped mirrors BookService.getAllGrouped(): groups the flat,
 // name-sorted row list by series name, preserving first-seen order
 // (Java's `LinkedHashMap::new` supplier to groupingBy) — a standard Go map
@@ -38,13 +50,12 @@ func (srv *Server) listBooksGrouped(c *gin.Context) {
 		return
 	}
 
-	const standaloneKey = "__standalone__"
-	order := []string{}
-	grouped := map[string][]BookDto{}
+	order := []bookGroupKey{}
+	grouped := map[bookGroupKey][]BookDto{}
 	for _, b := range rows {
-		key := standaloneKey
+		key := bookGroupKey{standalone: true}
 		if b.SeriesName != nil {
-			key = *b.SeriesName
+			key = bookGroupKey{seriesName: *b.SeriesName}
 		}
 		if _, seen := grouped[key]; !seen {
 			order = append(order, key)
@@ -55,9 +66,9 @@ func (srv *Server) listBooksGrouped(c *gin.Context) {
 	out := make([]BookGroupDto, 0, len(order))
 	for _, key := range order {
 		var seriesName *string
-		if key != standaloneKey {
-			k := key
-			seriesName = &k
+		if !key.standalone {
+			name := key.seriesName
+			seriesName = &name
 		}
 		out = append(out, BookGroupDto{SeriesName: seriesName, Books: grouped[key]})
 	}
@@ -121,7 +132,17 @@ func (srv *Server) updateBook(c *gin.Context) {
 	// UpdateBook doesn't know the series name — one cheap follow-up lookup
 	// only when the book actually has a series, mirroring what a real join
 	// would give for free; acceptable since PATCH is not a hot path.
-	seriesName := lookupSeriesName(c.Request.Context(), srv.store, book.SeriesID)
+	//
+	// A genuine lookup failure here (as opposed to the series legitimately
+	// not existing) must NOT be silently swallowed into seriesName=nil —
+	// CodeRabbit flagged that doing so returns 200 with the book incorrectly
+	// presented as standalone. lookupSeriesName only returns a nil error for
+	// "not found"; any other error is routed through handleStoreError below,
+	// same as every other failure path in this handler.
+	seriesName, err := lookupSeriesName(c.Request.Context(), srv.store, book.SeriesID)
+	if handleStoreError(c, err, "") {
+		return
+	}
 	c.JSON(http.StatusOK, domainBookToDto(*book, seriesName))
 }
 
@@ -231,13 +252,21 @@ func getSeriesByID(ctx context.Context, s store.PairStore, id int64) (*domain.Se
 	return nil, store.ErrNotFound
 }
 
-func lookupSeriesName(ctx context.Context, s store.PairStore, seriesID *int64) *string {
+// lookupSeriesName returns (nil, nil) when the book has no series or the
+// series genuinely doesn't exist (store.ErrNotFound) — both are legitimate,
+// non-error states for a standalone-looking book. Any other error (a real
+// store/DB failure) is propagated rather than swallowed, so the caller can
+// surface it as a 500 instead of silently returning a wrong 200.
+func lookupSeriesName(ctx context.Context, s store.PairStore, seriesID *int64) (*string, error) {
 	if seriesID == nil {
-		return nil
+		return nil, nil
 	}
 	sr, err := getSeriesByID(ctx, s, *seriesID)
-	if err != nil || sr == nil {
-		return nil
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, nil
+		}
+		return nil, err
 	}
-	return &sr.Name
+	return &sr.Name, nil
 }

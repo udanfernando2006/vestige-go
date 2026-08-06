@@ -1,7 +1,7 @@
 package handler
 
 import (
-	"strings"
+	"net/url"
 	"sync/atomic"
 	"time"
 
@@ -185,12 +185,36 @@ func isAllowedOrigin(origin string) bool {
 	if origin == "" {
 		return false
 	}
-	switch {
-	case strings.HasPrefix(origin, "http://localhost:"):
+	// CodeRabbit-flagged: strings.HasPrefix only checks that origin STARTS
+	// WITH the pattern — it says nothing about what follows. An attacker
+	// page's Origin header of e.g. "http://localhost:1234.evil.com" (or
+	// "http://127.0.0.1:8080.attacker.com") previously satisfied
+	// HasPrefix(origin, "http://localhost:") / "http://127.0.0.1:" even
+	// though the real origin is evil.com/attacker.com — since CORS is
+	// enforced by the browser reading THIS server's response header, that
+	// meant a malicious page visited in the SAME browser as this app is
+	// running in could have its cross-origin fetch to this API reflected
+	// back as allowed, and its JS could then read the response. Given this
+	// API has full CRUD over books/stores/settings (including the
+	// SELECTOR_API_KEY/DIRECT_API_KEY write path) and can trigger pipeline
+	// runs, this is a real risk, not a theoretical one — 127.0.0.1-bound
+	// doesn't help, since the browser (not network reachability) is what
+	// Origin-checking exists to constrain.
+	//
+	// Fixed by parsing the origin as a real URL and checking its Hostname()
+	// exactly (net/url.Parse already extracts the host from a properly
+	// formed "scheme://host:port" origin, with no ambiguity about where
+	// the host ends) — a malformed or trailing-garbage origin now simply
+	// fails to parse into the expected shape and is rejected, rather than
+	// matching on raw string prefix.
+	u, err := url.Parse(origin)
+	if err != nil || u.Scheme != "http" || u.Hostname() == "" {
+		return false
+	}
+	switch u.Hostname() {
+	case "localhost", "127.0.0.1":
 		return true
-	case strings.HasPrefix(origin, "http://127.0.0.1:"):
-		return true
-	case strings.HasPrefix(origin, "http://wails.localhost"):
+	case "wails.localhost":
 		return true
 	default:
 		return false

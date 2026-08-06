@@ -100,6 +100,27 @@ type Client struct {
 	httpClient *http.Client
 }
 
+// defaultTimeout is used when NewClient is called with timeout <= 0.
+// CodeRabbit-flagged: http.Client{Timeout: 0} means NO timeout in Go's
+// stdlib (unlike a zero-value default meaning "use something sensible") —
+// a caller passing an unset/zero time.Duration (e.g. a missing settings
+// field) would silently get a client that can hang forever on a stuck LLM
+// backend, blocking a pipeline run indefinitely with no way to recover
+// short of killing the process. This doc comment on NewClient already said
+// "callers should pick a reasonable value explicitly" but nothing actually
+// enforced that — this constant plus the guard below does.
+//
+// Set to match this project's existing convention rather than picking a
+// fresh value: discovery.go's discoveryLLMTimeout is 120s (chosen because
+// selector discovery sends a full HTML subtree plus a long tuned prompt to
+// a model that can be slow), and orchestrator.go's Path D uses
+// directExtractionLLMTimeout at the same scale. A shorter fallback here
+// (an earlier draft used 60s) would risk timing out exactly the kind of
+// slow-but-legitimate call this default exists to protect, if it were ever
+// actually hit — so this stays consistent with the real call sites instead
+// of introducing a third, inconsistent value.
+const defaultTimeout = 120 * time.Second
+
 // NewClient constructs a Client. Mirrors Extractor.__init__'s validation
 // exactly: apiBase and modelName are both required by the Python
 // constructor (raises ValueError if either is missing) — but modelName is
@@ -119,12 +140,20 @@ type Client struct {
 // timeout was never overridden in llm_extractor.py, so this is a new,
 // additive parameter rather than a ported one; callers should pick a
 // reasonable value explicitly rather than relying on a silent default.
+// A timeout <= 0 (including an unset zero-value time.Duration) is NOT
+// passed through to http.Client as-is — Go's http.Client treats Timeout:0
+// as "no timeout at all," the opposite of a safe default — and is instead
+// replaced with defaultTimeout, matching the doc comment's own stated
+// expectation rather than silently trusting every caller to honor it.
 func NewClient(apiBase, apiKey string, timeout time.Duration) (*Client, error) {
 	if strings.TrimSpace(apiBase) == "" {
 		return nil, fmt.Errorf("llm: apiBase is required — no default LLM endpoint is assumed")
 	}
 	if strings.TrimSpace(apiKey) == "" {
 		apiKey = "not-needed"
+	}
+	if timeout <= 0 {
+		timeout = defaultTimeout
 	}
 	return &Client{
 		apiBase:    strings.TrimRight(apiBase, "/"),
