@@ -1,0 +1,15 @@
+{
+	"fixed": {
+		"file_version": "0.2.0"
+	},
+	"info": {
+		"0000": {
+			"ProductVersion": "0.2.0",
+			"CompanyName": "Udan Fernando",
+			"FileDescription": "Book price and availability tracker — Go/Wails desktop rewrite",
+			"LegalCopyright": "© 2026, Udan Fernando",
+			"ProductName": "Vestige Go",
+			"Comments": "Second flagship rewrite of Vestige — Go, SQLite, no Docker"
+		}
+	}
+}
