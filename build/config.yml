@@ -10,7 +10,7 @@ info:
   description: "Book price and availability tracker — Go/Wails desktop rewrite"
   copyright: "© 2026, Udan Fernando"
   comments: "Second flagship rewrite of Vestige — Go, SQLite, no Docker"
-  version: "0.3.0"
+  version: "0.3.1"
   # cfBundleIconName: "appicon" # The macOS icon name in Assets.car icon bundles (optional)
   #                               # Should match the name of your .icon file without the extension
   #                               # If not set and Assets.car exists, defaults to "appicon"
