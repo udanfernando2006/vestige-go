@@ -98,6 +98,27 @@ jobs:
         env:
           PACKAGE_MANAGER: npm
 
+      # Regression guard — the class of bug that shipped v0.2.0/v0.3.0 with
+      # a silently-empty Chromium bundle (a stray tracked bin/chromium/.version
+      # file caused vendor:chromium's status check to falsely report "up to
+      # date" on every fresh CI checkout) produced a fully "successful" green
+      # build. This step makes that failure mode loud instead of silent,
+      # regardless of what mechanism causes it next time.
+      - name: Verify chromium bundle was packaged 
+        shell: pwsh
+        run: |
+          $exe = "bin/chromium/headless-shell.exe"
+          if (!(Test-Path $exe)) {
+            Write-Error "Chromium bundle missing at $exe — installer would silently fall back to system Chrome."
+            exit 1
+          }
+          $size = (Get-Item $exe).Length
+          if ($size -lt 10MB) {
+            Write-Error "Chromium bundle suspiciously small: $size bytes (expected 100MB+). vendor:chromium may not have run."
+            exit 1
+          }
+          Write-Host "Chromium bundle OK: $size bytes"
+
       # Debug aid to list output installers
       - name: List build output
         shell: bash
