@@ -60,10 +60,10 @@ jobs:
       - name: Resolve pinned wails3 CLI onto PATH
         shell: pwsh
         run: |
-          $binPath = go tool -n wails3
           $destDir = "$env:USERPROFILE\.local\bin"
           New-Item -ItemType Directory -Force -Path $destDir | Out-Null
           if (!(Test-Path "$destDir\wails3.exe")) {
+            $binPath = go tool -n wails3
             Copy-Item $binPath "$destDir\wails3.exe" -Force
           }
           Add-Content -Path $env:GITHUB_PATH -Value $destDir

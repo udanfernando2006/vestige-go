@@ -4,8 +4,6 @@ tasks:
   go:mod:tidy:
     summary: Runs `go mod tidy`
     internal: true
-    # Universal/multi-arch builds invoke this concurrently from parallel deps;
-    # two `go mod tidy` processes racing on go.mod can corrupt it (#4637).
     run: once
     cmds:
       - go mod tidy
@@ -72,11 +70,6 @@ tasks:
   build:frontend:
     label: build:frontend (DEV={{.DEV}} RUNNER={{.PACKAGE_MANAGER}})
     summary: Build the frontend project
-    # darwin:build:universal runs its per-arch builds as parallel deps, each of
-    # which depends on this task. Without run:once the two executions race:
-    # one regenerates frontend/bindings (-clean deletes it first) while the
-    # other's bundler is reading it, failing intermittently with
-    # 'Could not resolve "./bindings/<pkg>"' (#4637).
     run: once
     dir: frontend
     sources:
@@ -179,7 +172,7 @@ tasks:
     sources:
       - "**/*.[jt]s"
       - exclude: frontend/**/*
-      - frontend/bindings/**/* # Rerun when switching between dev/production mode causes changes in output
+      - frontend/bindings/**/*
       - "**/*.go"
       - go.mod
       - go.sum
@@ -190,23 +183,13 @@ tasks:
 
   generate:icons:
     summary: Generates Windows `.ico` from an image.
-    # wails3 generate icons has NO flag to skip macOS .icns generation — it's
-    # unconditional (confirmed via `wails3 generate icons --help`: -macfilename
-    # defaults to "build/darwin/icon.icns" even when omitted). This task's own
-    # `dir: build` means that default resolves to the nonexistent
-    # build/build/darwin/icon.icns, so -macfilename is kept explicitly here —
-    # NOT to actually produce a usable mac icon (Linux/macOS are dropped from
-    # this project's release scope), just to redirect the unavoidable write
-    # somewhere that exists and is harmless. build/darwin/ must exist (an
-    # empty dir + .gitkeep is enough — Git doesn't track empty folders) or
-    # this still fails with a path-not-found error.
     run: once
     dir: build
     sources:
       - "appicon.png"
     generates:
       - "windows/icon.ico"
-      - "darwin/icon.icns" # unused output, kept only because the tool always writes it
+      - "darwin/icon.icns"
     cmds:
       - wails3 generate icons -input appicon.png -windowsfilename windows/icon.ico -macfilename darwin/icon.icns
 
@@ -291,10 +274,6 @@ tasks:
       For CGO apps, set CGO_ENABLED=1 with libc-compatible builder/runtime images, e.g.:
         task build:docker CGO_ENABLED=1 GO_IMAGE=golang:bookworm RUNTIME_IMAGE=gcr.io/distroless/base-debian12
     deps:
-      # Build the production frontend so frontend/dist (embedded by the Go build
-      # inside the image) is present and current in the Docker build context.
-      # Pass the server,production tags so binding generation analyses the same
-      # build the Docker image compiles, not the default-tag build.
       - task: build:frontend
         vars:
           BUILD_FLAGS: "-tags server,production"

@@ -2,15 +2,6 @@
 -- Source-verified translation of models.py (SQLAlchemy/Postgres) — same five
 -- tables, same field-for-field shapes, no fields added or dropped.
 --
--- Open items NOT resolved by this file (flagged inline where relevant):
---   - Migration tool (golang-migrate / goose / hand-rolled) — blueprint §7 item 3, still open.
---     This is plain schema SQL, not yet wrapped in any migration-tool format.
---   - Price storage: NUMERIC(10,2) has no native SQLite equivalent — flagged at that column.
---   - sync_config()/books_config.json is NOT ported (confirmed decision) — no seed data,
---     no bootstrap-file table. Custom stock regex patterns live as ordinary rows in
---     setting_overrides, same as every other setting key — no schema change needed for
---     that decision, since setting_overrides was already a flat key/value table in v1.
---
 -- All CREATE TABLE / CREATE INDEX statements use IF NOT EXISTS for defense-in-depth
 -- idempotency beyond the app-level "only apply schema if the DB file is missing" guard.
 -- This does NOT substitute for the still-open migration-tooling decision above — it
@@ -111,10 +102,3 @@ CREATE TABLE IF NOT EXISTS setting_overrides (
     value        TEXT NOT NULL,
     is_encrypted INTEGER NOT NULL DEFAULT 0
 );
-
--- Same 11 keys as v1, no schema change to add a 12th if one is ever needed later
--- (flat key/value table — adding a setting is a code change, not a migration,
--- exactly as vestige_guide.md §6 already notes for v1). CUSTOM_STOCK_IN_PATTERNS
--- and CUSTOM_STOCK_OUT_PATTERNS are ordinary rows here now — no books_config.json,
--- no sync_config() seed/re-apply path, per the confirmed decision to move that
--- into the Settings UI directly.
