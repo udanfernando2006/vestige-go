@@ -1,4 +1,8 @@
-# <img src="build/appicon.png" alt="Vestige Go logo" width="40" height="40" valign="middle"> Vestige Go
+<p align="center">
+  <img src="build/appicon.png" alt="Vestige Go logo" width="120" height="120">
+</p>
+
+<h1 align="center">Vestige Go</h1>
 
 A config-driven book availability tracker. Add books and stores through the desktop app, and Vestige Go scrapes price/stock on a schedule, notifying you the moment a tracked book comes into stock.
 
@@ -44,8 +48,10 @@ Every result is written to a local SQLite database as an immutable snapshot row.
 
 ## Install & Run
 
-1. Grab the latest installer from this project's [GitHub Releases](../../releases) page — `VestigeGo_x.y.z_x64-setup.exe` (NSIS).
-2. Run it. Standard install — accept the defaults unless you have a reason not to.
+1. Grab the latest installer from this project's [GitHub Releases](../../releases) page. Two variants are published for every release:
+    - **`vestige-go-amd64-installer.exe`** — the standard install. Use this one unless you have a specific reason not to.
+    - **`vestige-go-dev-installer.exe`** — functionally identical, but built with a console window attached, so you'll see the app's live log output in a terminal alongside the UI as it runs. Useful if something's misbehaving and you want to see what's happening under the hood; otherwise just noise you don't need.
+2. Run the installer. Standard install — accept the defaults unless you have a reason not to.
 3. Launch Vestige Go. On first launch the bundled Chromium build and a fresh local database/encryption key are set up automatically — nothing to install or configure by hand first.
 
 That's the whole install process. There's no separate service to start, no daemon to keep running, and no configuration file to edit before the app opens for the first time.
